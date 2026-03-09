@@ -1,5 +1,3 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use http::Uri;
 use http::uri::{Authority, Scheme};
 
@@ -25,29 +23,46 @@ impl BaseUri {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct Backend {
+    pub base: BaseUri,
+}
+
+impl Backend {
+    pub fn new(base: BaseUri) -> Self {
+        Self { base }
+    }
+}
+
 #[derive(Debug)]
 pub struct BackendPool {
-    bases: Vec<BaseUri>,
-    rr: AtomicUsize,
+    backends: Box<[Backend]>,
 }
 
 impl BackendPool {
     pub fn new(bases: Vec<BaseUri>) -> Self {
-        Self {
-            bases,
-            rr: AtomicUsize::new(0),
-        }
+        let backends = bases
+            .into_iter()
+            .map(Backend::new)
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+
+        Self { backends }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.bases.is_empty()
+        self.backends.is_empty()
     }
 
-    pub fn pick(&self) -> Option<&BaseUri> {
-        if self.bases.is_empty() {
-            return None;
-        }
-        let i = self.rr.fetch_add(1, Ordering::Relaxed);
-        Some(&self.bases[i % self.bases.len()])
+    pub fn len(&self) -> usize {
+        self.backends.len()
+    }
+
+    pub fn get(&self, index: usize) -> Option<&Backend> {
+        self.backends.get(index)
+    }
+
+    pub fn backends(&self) -> &[Backend] {
+        &self.backends
     }
 }

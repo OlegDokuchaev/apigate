@@ -1,65 +1,62 @@
-use axum::body::Body;
-use http::HeaderMap;
-use http::header::{CONNECTION, HOST};
-use http::{Request, Response, StatusCode, Uri};
+use std::sync::Arc;
 
-use crate::backend::{BackendPool, BaseUri};
+use axum::body::Body;
+use http::header::{CONNECTION, HOST};
+use http::{HeaderMap, Request, Response, StatusCode, Uri};
+
+use crate::backend::{Backend, BaseUri};
+use crate::balancing::ProxyErrorKind;
+use crate::policy::Policy;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Rewrite {
-    /// Быстрый путь: forwarded_path = incoming_path.strip_prefix(prefix)
+    /// forwarded_path = incoming_path.strip_prefix(prefix)
     StripPrefix,
-    /// Фиксированный путь (минимальная версия, без подстановки path params)
+    /// фиксированный путь (без подстановки path params)
     Fixed(&'static str),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RouteMeta {
     pub service: &'static str,
+    pub route_path: &'static str,
     pub prefix: &'static str,
     pub rewrite: Rewrite,
+    pub policy: Arc<Policy>,
 }
 
 pub async fn proxy_request(
-    pool: &BackendPool,
+    backend: &Backend,
     client: &hyper_util::client::legacy::Client<
         hyper_util::client::legacy::connect::HttpConnector,
         Body,
     >,
     meta: &RouteMeta,
     req: Request<Body>,
-) -> Response<Body> {
-    let base = match pool.pick() {
-        Some(b) => b,
-        None => return bad_gateway("no backends"),
-    };
-
+) -> Result<Response<Body>, ProxyErrorKind> {
     let (mut parts, body) = req.into_parts();
 
     // --- вычисляем path ---
     let incoming_path = parts.uri.path();
 
     let path = match meta.rewrite {
-        Rewrite::StripPrefix => {
-            // ожидаем, что incoming_path начинается с prefix
-            match incoming_path.strip_prefix(meta.prefix) {
-                Some("") => "/", // если ровно "/sales" => в сервисе "/"
-                Some(rest) => {
-                    if rest.starts_with('/') {
-                        rest
-                    } else {
-                        "/"
-                    }
+        Rewrite::StripPrefix => match incoming_path.strip_prefix(meta.prefix) {
+            Some("") => "/",
+            Some(rest) => {
+                if rest.starts_with('/') {
+                    rest
+                } else {
+                    "/"
                 }
-                None => incoming_path, // fallback
             }
-        }
+            None => incoming_path,
+        },
         Rewrite::Fixed(to) => to,
     };
 
-    // query прокидываем как есть
-    // TODO: Dont allocate memory
-    let mut pq = String::with_capacity(
+    // TODO: later можно заменить на менее аллоцирующую сборку URI,
+    // но для path rewrite одна новая строка здесь нормальна.
+    let mut path_and_query = String::with_capacity(
         path.len()
             + parts
                 .uri
@@ -68,42 +65,39 @@ pub async fn proxy_request(
                 .unwrap_or(0)
             + 1,
     );
-    pq.push_str(path);
+
+    path_and_query.push_str(path);
+
     if let Some(q) = parts.uri.query() {
-        pq.push('?');
-        pq.push_str(q);
+        path_and_query.push('?');
+        path_and_query.push_str(q);
     }
 
-    let new_uri = build_uri(base, &pq);
-    parts.uri = match new_uri {
-        Ok(u) => u,
-        Err(e) => return bad_gateway(&format!("bad upstream uri: {e}")),
-    };
+    let new_uri = build_uri(&backend.base, &path_and_query)
+        .map_err(|_| ProxyErrorKind::InvalidUpstreamUri)?;
+    parts.uri = new_uri;
 
     // hop-by-hop headers
     strip_hop_headers(&mut parts.headers);
 
     // Host -> upstream authority
-    if let Some(host) = parts.headers.get_mut(HOST) {
-        *host = base.authority.as_str().parse().unwrap();
+    if let Ok(host) = backend.base.authority.as_str().parse() {
+        parts.headers.insert(HOST, host);
     } else {
-        parts
-            .headers
-            .insert(HOST, base.authority.as_str().parse().unwrap());
+        return Err(ProxyErrorKind::InvalidUpstreamUri);
     }
 
     let out_req = Request::from_parts(parts, body);
 
-    let resp = match client.request(out_req).await {
-        Ok(r) => r,
-        Err(e) => return bad_gateway(&format!("upstream error: {e}")),
-    };
+    let resp = client
+        .request(out_req)
+        .await
+        .map_err(|_| ProxyErrorKind::UpstreamRequest)?;
 
     let (mut resp_parts, resp_body) = resp.into_parts();
     strip_hop_headers(&mut resp_parts.headers);
 
-    // Важно: axum требует axum::body::Body в ответе; используем Body::new(...)
-    Response::from_parts(resp_parts, Body::new(resp_body))
+    Ok(Response::from_parts(resp_parts, Body::new(resp_body)))
 }
 
 fn build_uri(base: &BaseUri, path_and_query: &str) -> Result<Uri, http::Error> {
@@ -114,7 +108,7 @@ fn build_uri(base: &BaseUri, path_and_query: &str) -> Result<Uri, http::Error> {
         .build()
 }
 
-fn bad_gateway(msg: &str) -> Response<Body> {
+pub fn bad_gateway(msg: &str) -> Response<Body> {
     Response::builder()
         .status(StatusCode::BAD_GATEWAY)
         .header(http::header::CONTENT_TYPE, "text/plain; charset=utf-8")

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::{Request as AxumRequest, State};
@@ -12,13 +12,16 @@ use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 
 use crate::backend::{BackendPool, BaseUri};
-use crate::proxy::{Rewrite, RouteMeta, proxy_request};
+use crate::balancing::{BalanceCtx, ProxyErrorKind, ResultEvent, RoundRobin, StartEvent};
+use crate::policy::Policy;
+use crate::proxy::{Rewrite, RouteMeta, bad_gateway, proxy_request};
+use crate::routing::{NoRouteKey, RouteCtx};
 use crate::{Method, Routes};
 
 struct Inner {
     backends: HashMap<String, BackendPool>,
     client: Client<hyper_util::client::legacy::connect::HttpConnector, Body>,
-    _default_timeout: Duration, // пока не используется (в будущих версиях)
+    _default_timeout: Duration, // пока не используется
 }
 
 pub struct App {
@@ -28,6 +31,8 @@ pub struct App {
 pub struct AppBuilder {
     backends: HashMap<String, Vec<String>>,
     mounted: Vec<Routes>,
+    policies: HashMap<String, Arc<Policy>>,
+    default_policy: Arc<Policy>,
     default_timeout: Duration,
 }
 
@@ -36,6 +41,8 @@ impl AppBuilder {
         Self {
             backends: HashMap::new(),
             mounted: Vec::new(),
+            policies: HashMap::new(),
+            default_policy: Arc::new(Policy::new().router(NoRouteKey).balancer(RoundRobin::new())),
             default_timeout: Duration::from_secs(30),
         }
     }
@@ -49,6 +56,16 @@ impl AppBuilder {
             service.to_string(),
             urls.into_iter().map(|s| s.into()).collect(),
         );
+        self
+    }
+
+    pub fn policy(mut self, name: &str, policy: Policy) -> Self {
+        self.policies.insert(name.to_string(), Arc::new(policy));
+        self
+    }
+
+    pub fn default_policy(mut self, policy: Policy) -> Self {
+        self.default_policy = Arc::new(policy);
         self
     }
 
@@ -86,7 +103,19 @@ impl AppBuilder {
         let mut router = Router::new();
 
         for svc_routes in self.mounted {
-            router = mount_service(router, svc_routes)?;
+            if !inner.backends.contains_key(svc_routes.service) {
+                return Err(format!(
+                    "backend for service `{}` is not registered",
+                    svc_routes.service
+                ));
+            }
+
+            router = mount_service(
+                router,
+                svc_routes,
+                &self.policies,
+                self.default_policy.clone(),
+            )?;
         }
 
         let router = router.with_state(inner);
@@ -110,6 +139,8 @@ pub async fn run(addr: SocketAddr, app: App) -> std::io::Result<()> {
 fn mount_service(
     mut router: Router<Arc<Inner>>,
     routes: Routes,
+    policies: &HashMap<String, Arc<Policy>>,
+    default_policy: Arc<Policy>,
 ) -> Result<Router<Arc<Inner>>, String> {
     // проверим что backend зарегистрирован
     // (в минимальной версии лучше фейлиться сразу)
@@ -125,13 +156,17 @@ fn mount_service(
     for rd in routes.routes {
         let full_path = join(routes.prefix, rd.path);
 
+        let policy = resolve_policy(routes.policy, rd.policy, policies, &default_policy)?;
+
         let meta = RouteMeta {
             service: routes.service,
+            route_path: rd.path,
             prefix: routes.prefix,
             rewrite: match rd.to {
                 None => Rewrite::StripPrefix,
                 Some(to) => Rewrite::Fixed(to),
             },
+            policy,
         };
 
         let method_router = method_router(rd.method).layer(Extension(meta));
@@ -140,6 +175,23 @@ fn mount_service(
     }
 
     Ok(router)
+}
+
+fn resolve_policy(
+    service_policy: Option<&'static str>,
+    route_policy: Option<&'static str>,
+    registry: &HashMap<String, Arc<Policy>>,
+    default_policy: &Arc<Policy>,
+) -> Result<Arc<Policy>, String> {
+    let effective = route_policy.or(service_policy);
+
+    match effective {
+        Some(name) => registry
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("policy `{name}` is not registered")),
+        None => Ok(default_policy.clone()),
+    }
 }
 
 fn join(prefix: &str, path: &str) -> String {
@@ -180,12 +232,78 @@ async fn proxy_handler(
     let pool = match inner.backends.get(meta.service) {
         Some(p) => p,
         None => {
-            return http::Response::builder()
-                .status(http::StatusCode::BAD_GATEWAY)
-                .body(Body::from(format!("unknown backend `{}`", meta.service)))
-                .unwrap(); // TODO: Remove unwrap
+            return bad_gateway(&format!("unknown backend `{}`", meta.service));
         }
     };
 
-    proxy_request(pool, &inner.client, &meta, req).await
+    // Routing
+    let route_ctx = RouteCtx {
+        service: meta.service,
+        route_path: meta.route_path,
+        method: req.method(),
+        uri: req.uri(),
+        headers: req.headers(),
+    };
+    let routing = meta.policy.router.route(&route_ctx, pool);
+
+    // Balancer
+    let balance_ctx = BalanceCtx {
+        service: meta.service,
+        affinity: routing.affinity.as_ref(),
+        pool,
+        candidates: routing.candidates,
+    };
+    let backend_index = match meta.policy.balancer.pick(&balance_ctx) {
+        Some(index) => index,
+        None => {
+            return bad_gateway("no backends selected by balancer");
+        }
+    };
+    let backend = match pool.get(backend_index) {
+        Some(b) => b,
+        None => {
+            return bad_gateway("balancer returned invalid backend index");
+        }
+    };
+
+    // Make request
+    meta.policy.balancer.on_start(&StartEvent {
+        service: meta.service,
+        backend_index,
+    });
+
+    let started_at = Instant::now();
+
+    match proxy_request(backend, &inner.client, &meta, req).await {
+        Ok(response) => {
+            let elapsed = started_at.elapsed();
+
+            meta.policy.balancer.on_result(&ResultEvent {
+                service: meta.service,
+                backend_index,
+                status: Some(response.status()),
+                error: None,
+                head_latency: elapsed,
+            });
+
+            response
+        }
+        Err(error) => {
+            let elapsed = started_at.elapsed();
+
+            meta.policy.balancer.on_result(&ResultEvent {
+                service: meta.service,
+                backend_index,
+                status: None,
+                error: Some(error),
+                head_latency: elapsed,
+            });
+
+            match error {
+                ProxyErrorKind::NoBackends => bad_gateway("no backends"),
+                ProxyErrorKind::InvalidUpstreamUri => bad_gateway("bad upstream uri"),
+                ProxyErrorKind::UpstreamRequest => bad_gateway("upstream request failed"),
+            }
+        }
+    }
 }
