@@ -1,0 +1,17 @@
+[package]
+name = "apigate-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# server/router "внутри", наружу не отдаём
+axum = { version = "0.8", features = ["tokio", "http1", "http2"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+
+# клиент к upstream (streaming)
+hyper = { version = "1", features = ["client", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio", "client", "client-legacy"] }
+http-body-util = "0.1"
+
+http = "1"
+bytes = "1"
