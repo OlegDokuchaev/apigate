@@ -11,7 +11,7 @@ pub fn service(args: TokenStream, input: TokenStream) -> TokenStream {
     let args_ts = TokenStream2::from(args);
     let mut module = parse_macro_input!(input as ItemMod);
 
-    let (name, prefix) = match parse_service_args(args_ts) {
+    let (name, prefix, policy) = match parse_service_args(args_ts) {
         Ok(v) => v,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -44,6 +44,11 @@ pub fn service(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let routes_ident = syn::Ident::new("__APIGATE_ROUTES", Span::call_site());
 
+    let service_policy = match policy {
+        None => quote!(None),
+        Some(p) => quote!(Some(#p)),
+    };
+
     let const_ts = quote! {
         #[doc(hidden)]
         pub const #routes_ident: &'static [#apigate_path::RouteDef] = &[
@@ -56,6 +61,7 @@ pub fn service(args: TokenStream, input: TokenStream) -> TokenStream {
             #apigate_path::Routes {
                 service: #name,
                 prefix: #prefix,
+                policy: #service_policy,
                 routes: #routes_ident,
             }
         }
@@ -95,12 +101,13 @@ fn apigate_crate_path() -> Result<TokenStream2, syn::Error> {
     }
 }
 
-fn parse_service_args(args: TokenStream2) -> Result<(String, String), syn::Error> {
+fn parse_service_args(args: TokenStream2) -> Result<(String, String, Option<String>), syn::Error> {
     let parser = Punctuated::<Expr, Token![,]>::parse_terminated;
     let exprs: Punctuated<Expr, Token![,]> = parser.parse2(args)?;
 
     let mut name: Option<String> = None;
     let mut prefix: Option<String> = None;
+    let mut policy: Option<String> = None;
 
     for e in exprs {
         if let Expr::Assign(assign) = e {
@@ -123,6 +130,7 @@ fn parse_service_args(args: TokenStream2) -> Result<(String, String), syn::Error
             match key.as_str() {
                 "name" => name = Some(val),
                 "prefix" => prefix = Some(val),
+                "policy" => policy = Some(val),
                 _ => {}
             }
         }
@@ -132,7 +140,8 @@ fn parse_service_args(args: TokenStream2) -> Result<(String, String), syn::Error
         name.ok_or_else(|| syn::Error::new(Span::call_site(), "missing `name = \"...\"`"))?;
     let prefix =
         prefix.ok_or_else(|| syn::Error::new(Span::call_site(), "missing `prefix = \"...\"`"))?;
-    Ok((name, prefix))
+
+    Ok((name, prefix, policy))
 }
 
 /// Если функция имеет атрибут #[apigate::get/post/...], возвращает TokenStream для RouteDef.
@@ -168,12 +177,17 @@ fn extract_route_from_fn(apigate_path: &TokenStream2, f: &mut ItemFn) -> Option<
         None => quote!(None),
         Some(t) => quote!(Some(#t)),
     };
+    let policy = match args.policy {
+        None => quote!(None),
+        Some(p) => quote!(Some(#p)),
+    };
 
     Some(quote! {
         #apigate_path::RouteDef {
             method: #method,
             path: #path,
             to: #to,
+            policy: #policy,
         }
     })
 }
@@ -192,6 +206,7 @@ enum MethodKind {
 struct RouteArgs {
     path: String,
     to: Option<String>,
+    policy: Option<String>,
 }
 
 /// Парсим #[apigate::get("/x", to="/y", ...)]
@@ -215,6 +230,7 @@ fn parse_route_attr(attr: &Attribute) -> Option<(MethodKind, RouteArgs)> {
 
     let mut path: Option<String> = None;
     let mut to: Option<String> = None;
+    let mut policy: Option<String> = None;
 
     for (i, e) in exprs.into_iter().enumerate() {
         match e {
@@ -241,6 +257,7 @@ fn parse_route_attr(attr: &Attribute) -> Option<(MethodKind, RouteArgs)> {
                 match key.as_str() {
                     "path" => path = Some(val),
                     "to" => to = Some(val),
+                    "policy" => policy = Some(val),
                     _ => {}
                 }
             }
@@ -249,7 +266,7 @@ fn parse_route_attr(attr: &Attribute) -> Option<(MethodKind, RouteArgs)> {
     }
 
     let path = path?;
-    Some((kind, RouteArgs { path, to }))
+    Some((kind, RouteArgs { path, to, policy }))
 }
 
 // --- optional: заглушки, чтобы если кто-то случайно использует #[apigate::get] вне #[apigate::service],
