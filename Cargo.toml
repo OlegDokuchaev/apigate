@@ -1,0 +1,3 @@
+[workspace]
+resolver = "2"
+members = ["apigate", "apigate-core", "apigate-macros"]
