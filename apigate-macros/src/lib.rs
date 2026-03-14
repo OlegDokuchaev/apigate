@@ -1,9 +1,10 @@
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::parse::Parser;
 use syn::{
-    Attribute, Expr, Item, ItemFn, ItemMod, Lit, Token, parse_macro_input, punctuated::Punctuated,
+    Attribute, Expr, Item, ItemFn, ItemMod, Lit, Path, Token, parse_macro_input,
+    punctuated::Punctuated,
 };
 
 #[proc_macro_attribute]
@@ -24,12 +25,14 @@ pub fn service(args: TokenStream, input: TokenStream) -> TokenStream {
     // Собираем RouteDef из функций внутри модуля.
     // Важно: мы удаляем атрибуты #[apigate::get/post/...], чтобы их не пытался расширять компилятор.
     let mut route_defs: Vec<TokenStream2> = Vec::new();
+    let mut generated_items: Vec<Item> = Vec::new();
 
     if let Some((_brace, items)) = &mut module.content {
         for item in items.iter_mut() {
             if let Item::Fn(f) = item {
-                if let Some(route) = extract_route_from_fn(&apigate_path, f) {
-                    route_defs.push(route);
+                if let Some(extracted) = extract_route_from_fn(&apigate_path, f) {
+                    route_defs.push(extracted.route_def);
+                    generated_items.extend(extracted.generated_items);
                 }
             }
         }
@@ -67,11 +70,11 @@ pub fn service(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     };
 
-    let const_item: syn::Item =
-        syn::parse2(const_ts).expect("failed to parse generated const item");
-    let fn_item: syn::Item = syn::parse2(fn_ts).expect("failed to parse generated fn item");
+    let const_item: Item = syn::parse2(const_ts).expect("failed to parse generated const item");
+    let fn_item: Item = syn::parse2(fn_ts).expect("failed to parse generated fn item");
 
     if let Some((_brace, items)) = &mut module.content {
+        items.extend(generated_items);
         items.push(const_item);
         items.push(fn_item);
     } else {
@@ -84,6 +87,13 @@ pub fn service(args: TokenStream, input: TokenStream) -> TokenStream {
     }
 
     quote!(#module).into()
+}
+
+#[proc_macro_attribute]
+pub fn hook(_args: TokenStream, input: TokenStream) -> TokenStream {
+    // Пока hook — identity macro.
+    // Позже сюда можно добавить валидацию сигнатуры.
+    input
 }
 
 fn apigate_crate_path() -> Result<TokenStream2, syn::Error> {
@@ -144,10 +154,14 @@ fn parse_service_args(args: TokenStream2) -> Result<(String, String, Option<Stri
     Ok((name, prefix, policy))
 }
 
-/// Если функция имеет атрибут #[apigate::get/post/...], возвращает TokenStream для RouteDef.
+struct ExtractedRoute {
+    route_def: TokenStream2,
+    generated_items: Vec<Item>,
+}
+
+/// Если функция имеет атрибут #[apigate::get/post/...], возвращает RouteDef + сгенерированные helper items.
 /// Также удаляет этот атрибут из функции.
-fn extract_route_from_fn(apigate_path: &TokenStream2, f: &mut ItemFn) -> Option<TokenStream2> {
-    // ищем атрибут apigate::get/post/...
+fn extract_route_from_fn(apigate_path: &TokenStream2, f: &mut ItemFn) -> Option<ExtractedRoute> {
     let mut found: Option<(MethodKind, RouteArgs, usize)> = None;
 
     for (idx, attr) in f.attrs.iter().enumerate() {
@@ -159,7 +173,7 @@ fn extract_route_from_fn(apigate_path: &TokenStream2, f: &mut ItemFn) -> Option<
 
     let (kind, args, idx) = found?;
 
-    // удалить атрибут, чтобы компилятор не пытался его расширять дальше
+    // удалить route-атрибут, чтобы компилятор не пытался его расширять дальше
     f.attrs.remove(idx);
 
     let method = match kind {
@@ -182,13 +196,52 @@ fn extract_route_from_fn(apigate_path: &TokenStream2, f: &mut ItemFn) -> Option<
         Some(p) => quote!(Some(#p)),
     };
 
-    Some(quote! {
+    let mut generated_items = Vec::new();
+
+    let before = if args.before.is_empty() {
+        quote!(None)
+    } else {
+        let route_fn_ident = &f.sig.ident;
+        let before_ident = format_ident!("__apigate_before_{}", route_fn_ident);
+
+        let hook_calls = args.before.iter().map(|hook_path| {
+            quote! {
+                #hook_path(&mut ctx).await?;
+            }
+        });
+
+        let before_fn_ts = quote! {
+            #[doc(hidden)]
+            fn #before_ident<'a>(
+                mut ctx: #apigate_path::PartsCtx<'a>,
+            ) -> #apigate_path::BeforeFuture<'a> {
+                ::std::boxed::Box::pin(async move {
+                    #(#hook_calls)*
+                    Ok(())
+                })
+            }
+        };
+
+        let before_fn_item: Item =
+            syn::parse2(before_fn_ts).expect("failed to parse generated before helper");
+        generated_items.push(before_fn_item);
+
+        quote!(Some(#before_ident as #apigate_path::BeforeFn))
+    };
+
+    let route_def = quote! {
         #apigate_path::RouteDef {
             method: #method,
             path: #path,
             to: #to,
             policy: #policy,
+            before: #before,
         }
+    };
+
+    Some(ExtractedRoute {
+        route_def,
+        generated_items,
     })
 }
 
@@ -207,9 +260,10 @@ struct RouteArgs {
     path: String,
     to: Option<String>,
     policy: Option<String>,
+    before: Vec<Path>,
 }
 
-/// Парсим #[apigate::get("/x", to="/y", ...)]
+/// Парсим #[apigate::get("/x", to="/y", policy="...", before=[hook1, hook2])]
 fn parse_route_attr(attr: &Attribute) -> Option<(MethodKind, RouteArgs)> {
     let last = attr.path().segments.last()?.ident.to_string();
 
@@ -231,6 +285,7 @@ fn parse_route_attr(attr: &Attribute) -> Option<(MethodKind, RouteArgs)> {
     let mut path: Option<String> = None;
     let mut to: Option<String> = None;
     let mut policy: Option<String> = None;
+    let mut before: Vec<Path> = Vec::new();
 
     for (i, e) in exprs.into_iter().enumerate() {
         match e {
@@ -246,18 +301,36 @@ fn parse_route_attr(attr: &Attribute) -> Option<(MethodKind, RouteArgs)> {
                     Expr::Path(p) => p.path.segments.last().unwrap().ident.to_string(),
                     _ => continue,
                 };
-                let val = match *assign.right {
-                    Expr::Lit(l) => match l.lit {
-                        Lit::Str(s) => s.value(),
-                        _ => continue,
-                    },
-                    _ => continue,
-                };
 
-                match key.as_str() {
-                    "path" => path = Some(val),
-                    "to" => to = Some(val),
-                    "policy" => policy = Some(val),
+                match (key.as_str(), *assign.right) {
+                    ("path", Expr::Lit(l)) => {
+                        if let Lit::Str(s) = l.lit {
+                            path = Some(s.value());
+                        }
+                    }
+                    ("to", Expr::Lit(l)) => {
+                        if let Lit::Str(s) = l.lit {
+                            to = Some(s.value());
+                        }
+                    }
+                    ("policy", Expr::Lit(l)) => {
+                        if let Lit::Str(s) = l.lit {
+                            policy = Some(s.value());
+                        }
+                    }
+                    ("before", Expr::Array(arr)) => {
+                        let mut hooks = Vec::with_capacity(arr.elems.len());
+                        for elem in arr.elems {
+                            match elem {
+                                Expr::Path(p) => hooks.push(p.path),
+                                other => {
+                                    let _ = other;
+                                    return None;
+                                }
+                            }
+                        }
+                        before = hooks;
+                    }
                     _ => {}
                 }
             }
@@ -266,7 +339,15 @@ fn parse_route_attr(attr: &Attribute) -> Option<(MethodKind, RouteArgs)> {
     }
 
     let path = path?;
-    Some((kind, RouteArgs { path, to, policy }))
+    Some((
+        kind,
+        RouteArgs {
+            path,
+            to,
+            policy,
+            before,
+        },
+    ))
 }
 
 // --- optional: заглушки, чтобы если кто-то случайно использует #[apigate::get] вне #[apigate::service],
