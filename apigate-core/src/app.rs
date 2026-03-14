@@ -132,7 +132,7 @@ impl App {
 
 pub async fn run(addr: SocketAddr, app: App) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    // axum::serve intentionally simple (и это нам подходит как внутренняя обертка) :contentReference[oaicite:6]{index=6}
+    // axum::serve intentionally simple (и это нам подходит как внутренняя обертка)
     axum::serve(listener, app.router).await
 }
 
@@ -229,11 +229,8 @@ async fn proxy_handler(
     Extension(meta): Extension<RouteMeta>,
     req: AxumRequest,
 ) -> axum::response::Response {
-    let pool = match inner.backends.get(meta.service) {
-        Some(p) => p,
-        None => {
-            return bad_gateway(&format!("unknown backend `{}`", meta.service));
-        }
+    let Some(pool) = inner.backends.get(meta.service) else {
+        return bad_gateway(&format!("unknown backend `{}`", meta.service));
     };
 
     // Routing
@@ -253,17 +250,11 @@ async fn proxy_handler(
         pool,
         candidates: routing.candidates,
     };
-    let backend_index = match meta.policy.balancer.pick(&balance_ctx) {
-        Some(index) => index,
-        None => {
-            return bad_gateway("no backends selected by balancer");
-        }
+    let Some(backend_index) = meta.policy.balancer.pick(&balance_ctx) else {
+        return bad_gateway("no backends selected by balancer");
     };
-    let backend = match pool.get(backend_index) {
-        Some(b) => b,
-        None => {
-            return bad_gateway("balancer returned invalid backend index");
-        }
+    let Some(backend) = pool.get(backend_index) else {
+        return bad_gateway("balancer returned invalid backend index");
     };
 
     // Make request
