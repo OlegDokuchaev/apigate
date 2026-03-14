@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::{Request as AxumRequest, State};
+use axum::response::IntoResponse;
 use axum::routing;
 use axum::{Extension, Router};
 
@@ -16,7 +17,7 @@ use crate::balancing::{BalanceCtx, ProxyErrorKind, ResultEvent, RoundRobin, Star
 use crate::policy::Policy;
 use crate::proxy::{Rewrite, RouteMeta, bad_gateway, proxy_request};
 use crate::routing::{NoRouteKey, RouteCtx};
-use crate::{Method, Routes};
+use crate::{Method, PartsCtx, Routes};
 
 struct Inner {
     backends: HashMap<String, BackendPool>,
@@ -167,6 +168,7 @@ fn mount_service(
                 Some(to) => Rewrite::Fixed(to),
             },
             policy,
+            before: rd.before,
         };
 
         let method_router = method_router(rd.method).layer(Extension(meta));
@@ -232,14 +234,24 @@ async fn proxy_handler(
     let Some(pool) = inner.backends.get(meta.service) else {
         return bad_gateway(&format!("unknown backend `{}`", meta.service));
     };
+    let (mut parts, body) = req.into_parts();
+
+    // Before hook
+    if let Some(before) = meta.before {
+        let ctx = PartsCtx::new(meta.service, meta.route_path, &mut parts);
+
+        if let Err(err) = before(ctx).await {
+            return err.into_response();
+        }
+    }
 
     // Routing
     let route_ctx = RouteCtx {
         service: meta.service,
         route_path: meta.route_path,
-        method: req.method(),
-        uri: req.uri(),
-        headers: req.headers(),
+        method: &parts.method,
+        uri: &parts.uri,
+        headers: &parts.headers,
     };
     let routing = meta.policy.router.route(&route_ctx, pool);
 
@@ -263,6 +275,7 @@ async fn proxy_handler(
         backend_index,
     });
 
+    let req = http::Request::from_parts(parts, body);
     let started_at = Instant::now();
 
     match proxy_request(backend, &inner.client, &meta, req).await {
