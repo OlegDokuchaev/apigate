@@ -15,7 +15,11 @@ dependencies = [
  "anyhow",
  "apigate-core",
  "apigate-macros",
+ "axum",
+ "http",
  "serde",
+ "serde_json",
+ "serde_urlencoded",
  "tokio",
  "uuid",
 ]

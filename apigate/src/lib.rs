@@ -1,4 +1,26 @@
 extern crate self as apigate;
 
-pub use apigate_core::{App, AppBuilder, Method, RouteDef, Routes, BeforeFn, BeforeFuture, HookError, HookResult, PartsCtx, run};
+pub mod __private {
+    pub use axum;
+    pub use http;
+    pub use serde_json;
+    pub use serde_urlencoded;
+}
+
 pub use apigate_macros::*;
+pub use apigate_core::{
+    run,
+    App,
+    AppBuilder,
+    Routes,
+    RouteDef,
+    Method,
+    PartsCtx,
+    ApigateError,
+    HookResult,
+    MapResult,
+    BeforeFn,
+    BeforeFuture,
+    MapFn,
+    MapFuture,
+};
