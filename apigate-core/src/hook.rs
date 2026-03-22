@@ -1,57 +1,13 @@
-use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
 
-use axum::response::{IntoResponse, Response};
-use http::StatusCode;
+use crate::error::ApigateError;
 use http::header::{HeaderName, HeaderValue};
 use http::request::Parts;
 
 pub type BeforeFuture<'a> = Pin<Box<dyn Future<Output = HookResult> + Send + 'a>>;
 pub type BeforeFn = for<'a> fn(PartsCtx<'a>) -> BeforeFuture<'a>;
-pub type HookResult = Result<(), HookError>;
-
-#[derive(Debug, Clone)]
-pub struct HookError {
-    status: StatusCode,
-    message: Cow<'static, str>,
-}
-
-impl HookError {
-    pub fn new(status: StatusCode, message: impl Into<Cow<'static, str>>) -> Self {
-        Self {
-            status,
-            message: message.into(),
-        }
-    }
-
-    pub fn bad_request(message: impl Into<Cow<'static, str>>) -> Self {
-        Self::new(StatusCode::BAD_REQUEST, message)
-    }
-
-    pub fn unauthorized(message: impl Into<Cow<'static, str>>) -> Self {
-        Self::new(StatusCode::UNAUTHORIZED, message)
-    }
-
-    pub fn forbidden(message: impl Into<Cow<'static, str>>) -> Self {
-        Self::new(StatusCode::FORBIDDEN, message)
-    }
-
-    pub fn internal(message: impl Into<Cow<'static, str>>) -> Self {
-        Self::new(StatusCode::INTERNAL_SERVER_ERROR, message)
-    }
-}
-
-impl IntoResponse for HookError {
-    fn into_response(self) -> Response {
-        (
-            self.status,
-            [("content-type", "text/plain; charset=utf-8")],
-            self.message.into_owned(),
-        )
-            .into_response()
-    }
-}
+pub type HookResult = Result<(), ApigateError>;
 
 pub struct PartsCtx<'a> {
     service: &'static str,
@@ -104,13 +60,13 @@ impl<'a> PartsCtx<'a> {
         &mut self,
         name: impl TryInto<HeaderName>,
         value: impl TryInto<HeaderValue>,
-    ) -> Result<(), HookError> {
+    ) -> Result<(), ApigateError> {
         let name = name
             .try_into()
-            .map_err(|_| HookError::bad_request("invalid header name"))?;
+            .map_err(|_| ApigateError::bad_request("invalid header name"))?;
         let value = value
             .try_into()
-            .map_err(|_| HookError::bad_request("invalid header value"))?;
+            .map_err(|_| ApigateError::bad_request("invalid header value"))?;
 
         self.parts.headers.insert(name, value);
         Ok(())
@@ -120,17 +76,17 @@ impl<'a> PartsCtx<'a> {
         &mut self,
         name: impl TryInto<HeaderName>,
         value: impl TryInto<HeaderValue>,
-    ) -> Result<(), HookError> {
+    ) -> Result<(), ApigateError> {
         let name = name
             .try_into()
-            .map_err(|_| HookError::bad_request("invalid header name"))?;
+            .map_err(|_| ApigateError::bad_request("invalid header name"))?;
         if self.parts.headers.contains_key(&name) {
             return Ok(());
         }
 
         let value = value
             .try_into()
-            .map_err(|_| HookError::bad_request("invalid header value"))?;
+            .map_err(|_| ApigateError::bad_request("invalid header value"))?;
 
         self.parts.headers.insert(name, value);
         Ok(())

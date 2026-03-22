@@ -4,7 +4,7 @@ use axum::body::Body;
 use http::header::{CONNECTION, HOST};
 use http::{HeaderMap, Request, Response, StatusCode, Uri};
 
-use crate::BeforeFn;
+use crate::{BeforeFn, MapFn};
 use crate::backend::{Backend, BaseUri};
 use crate::balancing::ProxyErrorKind;
 use crate::policy::Policy;
@@ -25,6 +25,7 @@ pub struct RouteMeta {
     pub rewrite: Rewrite,
     pub policy: Arc<Policy>,
     pub before: Option<BeforeFn>,
+    pub map: Option<MapFn>,
 }
 
 pub async fn proxy_request(

@@ -22,6 +22,7 @@ use crate::{Method, PartsCtx, Routes};
 struct Inner {
     backends: HashMap<String, BackendPool>,
     client: Client<hyper_util::client::legacy::connect::HttpConnector, Body>,
+    map_body_limit: usize,
     _default_timeout: Duration, // пока не используется
 }
 
@@ -35,6 +36,7 @@ pub struct AppBuilder {
     policies: HashMap<String, Arc<Policy>>,
     default_policy: Arc<Policy>,
     default_timeout: Duration,
+    map_body_limit: usize,
 }
 
 impl AppBuilder {
@@ -45,6 +47,7 @@ impl AppBuilder {
             policies: HashMap::new(),
             default_policy: Arc::new(Policy::new().router(NoRouteKey).balancer(RoundRobin::new())),
             default_timeout: Duration::from_secs(30),
+            map_body_limit: 2 * 1024 * 1024,
         }
     }
 
@@ -75,6 +78,11 @@ impl AppBuilder {
         self
     }
 
+    pub fn map_body_limit(mut self, bytes: usize) -> Self {
+        self.map_body_limit = bytes;
+        self
+    }
+
     pub fn mount(mut self, routes: Routes) -> Self {
         self.mounted.push(routes);
         self
@@ -98,6 +106,7 @@ impl AppBuilder {
             backends: pools,
             client,
             _default_timeout: self.default_timeout,
+            map_body_limit: self.map_body_limit,
         });
 
         // build router with state
@@ -169,6 +178,7 @@ fn mount_service(
             },
             policy,
             before: rd.before,
+            map: rd.map,
         };
 
         let method_router = method_router(rd.method).layer(Extension(meta));
@@ -229,29 +239,44 @@ fn method_router(method: Method) -> routing::MethodRouter<Arc<Inner>> {
 async fn proxy_handler(
     State(inner): State<Arc<Inner>>,
     Extension(meta): Extension<RouteMeta>,
-    req: AxumRequest,
+    mut req: AxumRequest,
 ) -> axum::response::Response {
     let Some(pool) = inner.backends.get(meta.service) else {
         return bad_gateway(&format!("unknown backend `{}`", meta.service));
     };
-    let (mut parts, body) = req.into_parts();
 
     // Before hook
     if let Some(before) = meta.before {
+        let (mut parts, body) = req.into_parts();
         let ctx = PartsCtx::new(meta.service, meta.route_path, &mut parts);
 
         if let Err(err) = before(ctx).await {
             return err.into_response();
         }
+
+        req = http::Request::from_parts(parts, body);
+    }
+
+    // Map
+    if let Some(map) = meta.map {
+        let (mut parts, body) = req.into_parts();
+        let ctx = PartsCtx::new(meta.service, meta.route_path, &mut parts);
+
+        let body = match map(ctx, body, inner.map_body_limit).await {
+            Ok(body) => body,
+            Err(err) => return err.into_response(),
+        };
+
+        req = http::Request::from_parts(parts, body);
     }
 
     // Routing
     let route_ctx = RouteCtx {
         service: meta.service,
         route_path: meta.route_path,
-        method: &parts.method,
-        uri: &parts.uri,
-        headers: &parts.headers,
+        method: req.method(),
+        uri: req.uri(),
+        headers: req.headers(),
     };
     let routing = meta.policy.router.route(&route_ctx, pool);
 
@@ -275,7 +300,6 @@ async fn proxy_handler(
         backend_index,
     });
 
-    let req = http::Request::from_parts(parts, body);
     let started_at = Instant::now();
 
     match proxy_request(backend, &inner.client, &meta, req).await {
