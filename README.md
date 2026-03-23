@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
             "sales_default",
             apigate::Policy::new()
                 .router(apigate::routing::HeaderSticky::new("x-user-id"))
-                .balancer(apigate::balancing::P2c::new()),
+                .balancer(apigate::balancing::ConsistentHash::new()),
         )
         .policy(
             "files_default",
@@ -428,7 +428,7 @@ let app = apigate::App::builder()
         "sales_default",
         apigate::Policy::new()
             .router(apigate::routing::HeaderSticky::new("x-user-id"))
-            .balancer(apigate::balancing::P2c::new()),
+            .balancer(apigate::balancing::ConsistentHash::new()),
     )
     .build()?;
 ```
