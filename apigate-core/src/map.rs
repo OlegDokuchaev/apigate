@@ -1,8 +1,8 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::error::{ApigateError};
 use crate::PartsCtx;
+use crate::error::ApigateError;
 use axum::body::Body;
 
 pub type MapFuture<'a> = Pin<Box<dyn Future<Output = MapBodyResult> + Send + 'a>>;

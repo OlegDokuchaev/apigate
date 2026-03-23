@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use super::{BalanceCtx, Balancer, ResultEvent};
 
@@ -72,12 +72,8 @@ impl Balancer for LeastTime {
                     } else {
                         old - old / EWMA_WEIGHT + sample / EWMA_WEIGHT
                     };
-                    match slot.compare_exchange_weak(
-                        old,
-                        new,
-                        Ordering::Relaxed,
-                        Ordering::Relaxed,
-                    ) {
+                    match slot.compare_exchange_weak(old, new, Ordering::Relaxed, Ordering::Relaxed)
+                    {
                         Ok(_) => break,
                         Err(actual) => old = actual,
                     }

@@ -1,12 +1,11 @@
-mod no_route_key;
 mod header_sticky;
+mod no_route_key;
 
 use std::borrow::Cow;
 
 use crate::backend::BackendPool;
 
 pub use no_route_key::NoRouteKey;
-pub use header_sticky::HeaderSticky;
 
 pub struct RouteCtx<'a> {
     pub service: &'a str,

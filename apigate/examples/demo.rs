@@ -92,7 +92,10 @@ async fn remap_products_query(
     Ok(ProductsQueryService {
         offset: (page - 1) * size,
         limit: size,
-        query: input.q.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()),
+        query: input
+            .q
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty()),
     })
 }
 
@@ -221,13 +224,19 @@ async fn main() -> anyhow::Result<()> {
     println!("  curl -i http://127.0.0.1:8080/sales/public");
     println!("  curl -i -H 'x-api-key: secret-key' http://127.0.0.1:8080/sales/admin/stats");
     println!("  curl -i -H 'authorization: Bearer test' http://127.0.0.1:8080/sales/user");
-    println!("  curl -i -H 'x-api-key: secret-key' -H 'authorization: Bearer test' http://127.0.0.1:8080/sales/secure-user");
+    println!(
+        "  curl -i -H 'x-api-key: secret-key' -H 'authorization: Bearer test' http://127.0.0.1:8080/sales/secure-user"
+    );
     println!("  curl -i 'http://127.0.0.1:8080/sales/products?page=2&size=5&q=  test  '");
     println!("  curl -i -X POST http://127.0.0.1:8080/sales/buy \\");
     println!("    -H 'authorization: Bearer test' -H 'content-type: application/json' \\");
-    println!("    -d '{{\"sale_ids\":[\"11111111-1111-1111-1111-111111111111\"],\"coupon\":\"  sale10  \",\"use_bonus_points\":true}}'");
+    println!(
+        "    -d '{{\"sale_ids\":[\"11111111-1111-1111-1111-111111111111\"],\"coupon\":\"  sale10  \",\"use_bonus_points\":true}}'"
+    );
     println!("  curl -i -X POST http://127.0.0.1:8080/sales/legacy-create \\");
-    println!("    -H 'x-api-key: secret-key' -H 'content-type: application/x-www-form-urlencoded' \\");
+    println!(
+        "    -H 'x-api-key: secret-key' -H 'content-type: application/x-www-form-urlencoded' \\"
+    );
     println!("    --data 'title=  Demo+Title  &category=pets'");
     println!();
     println!("Run Caddy on 127.0.0.1:8081 to inspect rewritten query/body/headers.");

@@ -2,7 +2,10 @@ use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::parse::Parser;
-use syn::{Attribute, Expr, Item, ItemFn, ItemMod, Lit, Path, Token, parse_macro_input, punctuated::Punctuated, Type, TypePath};
+use syn::{
+    Attribute, Expr, Item, ItemFn, ItemMod, Lit, Path, Token, Type, TypePath, parse_macro_input,
+    punctuated::Punctuated,
+};
 
 #[proc_macro_attribute]
 pub fn service(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -210,7 +213,13 @@ fn extract_route_from_fn(
     let mut generated_items = Vec::new();
 
     let before = generate_before_wrapper(apigate_path, f, &args.before, &mut generated_items)?;
-    let map = generate_map_wrapper(apigate_path, f, &args.data, args.map.as_ref(), &mut generated_items)?;
+    let map = generate_map_wrapper(
+        apigate_path,
+        f,
+        &args.data,
+        args.map.as_ref(),
+        &mut generated_items,
+    )?;
 
     let route_def = quote! {
         #apigate_path::RouteDef {
@@ -546,7 +555,10 @@ fn parse_route_attr(attr: &Attribute) -> Result<Option<(MethodKind, RouteArgs)>,
                         if let Lit::Str(s) = l.lit {
                             path = Some(s.value());
                         } else {
-                            return Err(syn::Error::new_spanned(l, "`path` must be a string literal"));
+                            return Err(syn::Error::new_spanned(
+                                l,
+                                "`path` must be a string literal",
+                            ));
                         }
                     }
 
@@ -554,7 +566,10 @@ fn parse_route_attr(attr: &Attribute) -> Result<Option<(MethodKind, RouteArgs)>,
                         if let Lit::Str(s) = l.lit {
                             to = Some(s.value());
                         } else {
-                            return Err(syn::Error::new_spanned(l, "`to` must be a string literal"));
+                            return Err(syn::Error::new_spanned(
+                                l,
+                                "`to` must be a string literal",
+                            ));
                         }
                     }
 
@@ -562,7 +577,10 @@ fn parse_route_attr(attr: &Attribute) -> Result<Option<(MethodKind, RouteArgs)>,
                         if let Lit::Str(s) = l.lit {
                             policy = Some(s.value());
                         } else {
-                            return Err(syn::Error::new_spanned(l, "`policy` must be a string literal"));
+                            return Err(syn::Error::new_spanned(
+                                l,
+                                "`policy` must be a string literal",
+                            ));
                         }
                     }
 

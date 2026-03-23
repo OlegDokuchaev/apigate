@@ -4,10 +4,10 @@ use axum::body::Body;
 use http::header::{CONNECTION, HOST};
 use http::{HeaderMap, Request, Response, StatusCode, Uri};
 
-use crate::{BeforeFn, MapFn};
 use crate::backend::{Backend, BaseUri};
 use crate::balancing::ProxyErrorKind;
 use crate::policy::Policy;
+use crate::{BeforeFn, MapFn};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Rewrite {

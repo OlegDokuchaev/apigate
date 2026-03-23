@@ -15,3 +15,4 @@ http-body-util = "0.1"
 
 http = "1"
 bytes = "1"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }

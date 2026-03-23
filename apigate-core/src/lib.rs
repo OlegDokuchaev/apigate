@@ -1,19 +1,19 @@
 mod app;
 mod backend;
 mod balancing;
-mod parts_ctx;
+mod error;
 mod hook;
+mod map;
+mod parts_ctx;
 mod policy;
 mod proxy;
 mod routing;
-mod map;
-mod error;
 
 pub use app::{App, AppBuilder, run};
-pub use parts_ctx::PartsCtx;
+pub use error::ApigateError;
 pub use hook::{BeforeFn, BeforeFuture, HookResult};
 pub use map::{MapFn, MapFuture, MapRequestResult, MapResult};
-pub use error::ApigateError;
+pub use parts_ctx::PartsCtx;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Method {

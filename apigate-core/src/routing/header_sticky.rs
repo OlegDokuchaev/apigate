@@ -19,7 +19,7 @@ impl RouteStrategy for HeaderSticky {
             .headers
             .get(self.header)
             .and_then(|v| v.to_str().ok())
-            .map(|v| AffinityKey::owned(v));
+            .map(AffinityKey::owned);
 
         RoutingDecision {
             affinity,
