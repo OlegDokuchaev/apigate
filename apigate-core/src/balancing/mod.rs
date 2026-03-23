@@ -1,6 +1,7 @@
-mod round_robin;
+mod consistent_hash;
 mod least_request;
 mod least_time;
+mod round_robin;
 
 use std::time::Duration;
 
@@ -8,8 +9,6 @@ use crate::backend::{Backend, BackendPool};
 use crate::routing::{AffinityKey, CandidateSet};
 
 pub use round_robin::RoundRobin;
-pub use least_request::LeastRequest;
-pub use least_time::LeastTime;
 
 pub struct BackendRef<'a> {
     pub index: usize,
@@ -48,6 +47,13 @@ impl<'a> BalanceCtx<'a> {
         let index = self.candidate_index(nth)?;
         let backend = self.pool.get(index)?;
         Some(BackendRef { index, backend })
+    }
+
+    pub fn is_candidate(&self, backend_idx: usize) -> bool {
+        match self.candidates {
+            CandidateSet::All => backend_idx < self.pool.len(),
+            CandidateSet::Indices(indices) => indices.contains(&backend_idx),
+        }
     }
 }
 
