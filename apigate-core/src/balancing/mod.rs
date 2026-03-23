@@ -1,8 +1,15 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+mod round_robin;
+mod least_request;
+mod least_time;
+
 use std::time::Duration;
 
 use crate::backend::{Backend, BackendPool};
 use crate::routing::{AffinityKey, CandidateSet};
+
+pub use round_robin::RoundRobin;
+pub use least_request::LeastRequest;
+pub use least_time::LeastTime;
 
 pub struct BackendRef<'a> {
     pub index: usize,
@@ -70,29 +77,4 @@ pub trait Balancer: Send + Sync + 'static {
     fn on_start(&self, _event: &StartEvent<'_>) {}
 
     fn on_result(&self, _event: &ResultEvent<'_>) {}
-}
-
-#[derive(Debug, Default)]
-pub struct RoundRobin {
-    next: AtomicUsize,
-}
-
-impl RoundRobin {
-    pub fn new() -> Self {
-        Self {
-            next: AtomicUsize::new(0),
-        }
-    }
-}
-
-impl Balancer for RoundRobin {
-    fn pick<'a>(&self, ctx: &'a BalanceCtx<'a>) -> Option<usize> {
-        let len = ctx.candidate_len();
-        if len == 0 {
-            return None;
-        }
-
-        let pos = self.next.fetch_add(1, Ordering::Relaxed) % len;
-        ctx.candidate_index(pos)
-    }
 }
