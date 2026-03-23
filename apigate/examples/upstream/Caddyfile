@@ -1,0 +1,157 @@
+{
+	log {
+		level INFO
+	}
+}
+
+:8081 {
+	@ping {
+		method GET
+		path /ping
+	}
+	handle @ping {
+		respond "pong\n" 200
+	}
+
+	@internal {
+		method GET
+		path /internal
+	}
+	handle @internal {
+		templates
+		respond `{
+  "kind": "internal",
+  "method": "{{.Req.Method}}",
+  "uri": "{{.Req.URL}}",
+  "host": "{{.Req.Host}}",
+  "headers": {{.Req.Header | toJson}}
+}` 200
+	}
+
+	@admin_stats {
+		method GET
+		path /admin/stats
+	}
+	handle @admin_stats {
+		templates
+		respond `{
+  "kind": "admin_stats",
+  "method": "{{.Req.Method}}",
+  "uri": "{{.Req.URL}}",
+  "host": "{{.Req.Host}}",
+  "headers": {{.Req.Header | toJson}}
+}` 200
+	}
+
+	@user {
+		method GET
+		path /user
+	}
+	handle @user {
+		templates
+		respond `{
+  "kind": "user",
+  "method": "{{.Req.Method}}",
+  "uri": "{{.Req.URL}}",
+  "host": "{{.Req.Host}}",
+  "headers": {{.Req.Header | toJson}}
+}` 200
+	}
+
+	@secure_user {
+		method GET
+		path /secure-user
+	}
+	handle @secure_user {
+		templates
+		respond `{
+  "kind": "secure_user",
+  "method": "{{.Req.Method}}",
+  "uri": "{{.Req.URL}}",
+  "host": "{{.Req.Host}}",
+  "headers": {{.Req.Header | toJson}}
+}` 200
+	}
+
+	@products {
+		method GET
+		path /products
+	}
+	handle @products {
+		templates
+		respond `{
+  "kind": "products",
+  "method": "{{.Req.Method}}",
+  "uri": "{{.Req.URL}}",
+  "query": "{{.Req.URL.RawQuery}}",
+  "headers": {{.Req.Header | toJson}}
+}` 200
+	}
+
+	@buy {
+		method POST
+		path /buy
+	}
+	handle @buy {
+		respond <<EOF
+kind=buy
+method={method}
+uri={uri}
+content_type={header.Content-Type}
+x_user_id={header.X-User-Id}
+x_user_role={header.X-User-Role}
+x_request_id={header.X-Request-Id}
+body={http.request.body}
+EOF 200
+	}
+
+	@legacy_create {
+		method POST
+		path /legacy-create
+	}
+	handle @legacy_create {
+		respond <<EOF
+kind=legacy_create
+method={method}
+uri={uri}
+content_type={header.Content-Type}
+x_api_key={header.X-Api-Key}
+body={http.request.body}
+EOF 200
+	}
+
+	@anything {
+		method GET
+		path /anything
+	}
+	handle @anything {
+		respond "anything-ok\n" 200
+	}
+
+	@upload {
+		method POST PUT
+		path /upload
+	}
+	handle @upload {
+		respond "" 204
+	}
+
+	@byid {
+		method GET
+		path_regexp byid ^/([^/]+)$
+		not path /ping /internal /admin/stats /user /secure-user /products /buy /legacy-create /anything /upload
+	}
+	handle @byid {
+		templates
+		respond `{
+  "kind": "by_id",
+  "id": "{re.byid.1}",
+  "uri": "{{.Req.URL}}",
+  "headers": {{.Req.Header | toJson}}
+}` 200
+	}
+
+	handle {
+		respond "not-found\n" 404
+	}
+}
