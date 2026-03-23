@@ -1,6 +1,7 @@
 mod app;
 mod backend;
 mod balancing;
+mod parts_ctx;
 mod hook;
 mod policy;
 mod proxy;
@@ -9,7 +10,8 @@ mod map;
 mod error;
 
 pub use app::{App, AppBuilder, run};
-pub use hook::{BeforeFn, BeforeFuture, HookResult, PartsCtx};
+pub use parts_ctx::PartsCtx;
+pub use hook::{BeforeFn, BeforeFuture, HookResult};
 pub use map::{MapFn, MapFuture, MapRequestResult, MapResult};
 pub use error::ApigateError;
 
