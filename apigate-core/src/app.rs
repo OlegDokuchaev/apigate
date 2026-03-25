@@ -15,7 +15,8 @@ use hyper_util::rt::TokioExecutor;
 use crate::backend::{BackendPool, BaseUri};
 use crate::balancing::{BalanceCtx, ProxyErrorKind, ResultEvent, RoundRobin, StartEvent};
 use crate::policy::Policy;
-use crate::proxy::{Rewrite, RouteMeta, bad_gateway, proxy_request};
+use crate::proxy::{bad_gateway, proxy_request};
+use crate::route::{FixedRewrite, Rewrite, RouteMeta};
 use crate::routing::{NoRouteKey, RouteCtx};
 use crate::{Method, PartsCtx, Routes};
 
@@ -174,7 +175,7 @@ fn mount_service(
             prefix: routes.prefix,
             rewrite: match rd.to {
                 None => Rewrite::StripPrefix,
-                Some(to) => Rewrite::Fixed(to),
+                Some(to) => Rewrite::Fixed(FixedRewrite::new(to)),
             },
             policy,
             before: rd.before,
@@ -242,7 +243,7 @@ async fn proxy_handler(
     mut req: AxumRequest,
 ) -> axum::response::Response {
     let Some(pool) = inner.backends.get(meta.service) else {
-        return bad_gateway(&format!("unknown backend `{}`", meta.service));
+        return bad_gateway(format!("unknown backend `{}`", meta.service));
     };
 
     // Before hook

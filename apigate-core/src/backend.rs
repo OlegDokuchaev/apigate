@@ -1,10 +1,15 @@
 use http::Uri;
+use http::header::HeaderValue;
 use http::uri::{Authority, Scheme};
 
 #[derive(Clone, Debug)]
 pub struct BaseUri {
     pub scheme: Scheme,
     pub authority: Authority,
+    /// Pre-computed `"{scheme}://{authority}"` for fast URI building.
+    pub prefix: String,
+    /// Pre-computed Host header value.
+    pub host_header: HeaderValue,
 }
 
 impl BaseUri {
@@ -19,7 +24,16 @@ impl BaseUri {
             .cloned()
             .ok_or_else(|| format!("uri `{s}` missing authority (expected http://host:port)"))?;
 
-        Ok(Self { scheme, authority })
+        let prefix = format!("{scheme}://{authority}");
+        let host_header = HeaderValue::from_str(authority.as_str())
+            .map_err(|e| format!("invalid authority for Host header `{authority}`: {e}"))?;
+
+        Ok(Self {
+            scheme,
+            authority,
+            prefix,
+            host_header,
+        })
     }
 }
 

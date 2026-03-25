@@ -7,6 +7,7 @@ mod map;
 mod parts_ctx;
 mod policy;
 mod proxy;
+mod route;
 mod routing;
 
 pub use app::{App, AppBuilder, run};
