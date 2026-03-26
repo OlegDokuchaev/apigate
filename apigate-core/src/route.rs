@@ -19,7 +19,8 @@ pub struct RouteMeta {
 #[derive(Clone, Debug)]
 pub enum Rewrite {
     StripPrefix,
-    Fixed(FixedRewrite),
+    Static(FixedRewrite),
+    Template(&'static RewriteTemplate),
 }
 
 #[derive(Clone, Debug)]
@@ -45,4 +46,30 @@ impl FixedRewrite {
     pub fn no_query(&self) -> &PathAndQuery {
         &self.no_query
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RewriteTemplate {
+    pub src: &'static [SrcSeg],
+    pub dst: &'static [DstChunk],
+    pub static_len: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum SrcSeg {
+    Lit(&'static str),
+    Param,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DstChunk {
+    Lit(&'static str),
+    Capture { src_index: u8 },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum RewriteSpec {
+    StripPrefix,
+    Static(&'static str),
+    Template(&'static RewriteTemplate),
 }

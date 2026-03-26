@@ -16,7 +16,7 @@ use crate::backend::{BackendPool, BaseUri};
 use crate::balancing::{BalanceCtx, ProxyErrorKind, ResultEvent, RoundRobin, StartEvent};
 use crate::policy::Policy;
 use crate::proxy::{bad_gateway, proxy_request};
-use crate::route::{FixedRewrite, Rewrite, RouteMeta};
+use crate::route::{FixedRewrite, Rewrite, RewriteSpec, RouteMeta};
 use crate::routing::{NoRouteKey, RouteCtx};
 use crate::{Method, PartsCtx, Routes};
 
@@ -173,9 +173,10 @@ fn mount_service(
             service: routes.service,
             route_path: rd.path,
             prefix: routes.prefix,
-            rewrite: match rd.to {
-                None => Rewrite::StripPrefix,
-                Some(to) => Rewrite::Fixed(FixedRewrite::new(to)),
+            rewrite: match rd.rewrite {
+                RewriteSpec::StripPrefix => Rewrite::StripPrefix,
+                RewriteSpec::Static(to) => Rewrite::Static(FixedRewrite::new(to)),
+                RewriteSpec::Template(tpl) => Rewrite::Template(tpl),
             },
             policy,
             before: rd.before,

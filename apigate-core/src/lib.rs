@@ -15,6 +15,7 @@ pub use error::ApigateError;
 pub use hook::{BeforeFn, BeforeFuture, HookResult};
 pub use map::{MapFn, MapFuture, MapRequestResult, MapResult};
 pub use parts_ctx::PartsCtx;
+pub use route::{DstChunk, RewriteSpec, RewriteTemplate, SrcSeg};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Method {
@@ -31,7 +32,7 @@ pub enum Method {
 pub struct RouteDef {
     pub method: Method,
     pub path: &'static str,
-    pub to: Option<&'static str>,
+    pub rewrite: RewriteSpec,
     pub policy: Option<&'static str>,
     pub before: Option<BeforeFn>,
     pub map: Option<MapFn>,
