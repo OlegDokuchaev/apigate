@@ -120,6 +120,20 @@ body={http.request.body}
 EOF 200
 	}
 
+	@reviews {
+		method GET
+		path_regexp reviews ^/api/v2/reviews/([^/]+)$
+	}
+	handle @reviews {
+		templates
+		respond `{
+  "kind": "review",
+  "id": "{re.reviews.1}",
+  "uri": "{{.Req.URL}}",
+  "headers": {{.Req.Header | toJson}}
+}` 200
+	}
+
 	@anything {
 		method GET
 		path /anything

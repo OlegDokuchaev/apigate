@@ -167,13 +167,17 @@ mod sales {
     )]
     async fn secure_user_profile() {}
 
-    // Маршрут с параметром
+    // Path parameter (StripPrefix — forwards as-is after stripping prefix)
     #[apigate::get(
         "/{id}",
         path = SaleIdPath,
         before = [mark_demo_request]
     )]
     async fn get_by_id() {}
+
+    // Rewrite template: /sales/item/{id}/review → /api/v2/reviews/{id}
+    #[apigate::get("/item/{id}/review", to = "/api/v2/reviews/{id}")]
+    async fn item_review() {}
 
     // Изменение query
     #[apigate::get(
@@ -227,6 +231,7 @@ async fn main() -> anyhow::Result<()> {
     println!(
         "  curl -i -H 'x-api-key: secret-key' -H 'authorization: Bearer test' http://127.0.0.1:8080/sales/secure-user"
     );
+    println!("  curl -i http://127.0.0.1:8080/sales/item/abc-123/review");
     println!("  curl -i 'http://127.0.0.1:8080/sales/products?page=2&size=5&q=  test  '");
     println!("  curl -i -X POST http://127.0.0.1:8080/sales/buy \\");
     println!("    -H 'authorization: Bearer test' -H 'content-type: application/json' \\");
