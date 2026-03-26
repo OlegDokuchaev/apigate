@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
@@ -200,17 +202,42 @@ fn extract_route_from_fn(
         MethodKind::Options => quote!(#apigate_path::Method::Options),
     };
 
-    let path = args.path;
-    let to = match args.to {
-        None => quote!(None),
-        Some(t) => quote!(Some(#t)),
-    };
+    let path = &args.path;
     let policy = match args.policy {
         None => quote!(None),
         Some(p) => quote!(Some(#p)),
     };
 
     let mut generated_items = Vec::new();
+
+    let rewrite_spec = match &args.to {
+        None => quote!(#apigate_path::RewriteSpec::StripPrefix),
+        Some(t) if !t.contains('{') => quote!(#apigate_path::RewriteSpec::Static(#t)),
+        Some(t) => {
+            let compiled = compile_rewrite_template(apigate_path, path, t)
+                .map_err(|msg| syn::Error::new(Span::call_site(), msg))?;
+
+            let route_fn_ident = &f.sig.ident;
+            let template_ident = format_ident!("__APIGATE_REWRITE_{}", route_fn_ident);
+            let src_tokens = &compiled.src_tokens;
+            let dst_tokens = &compiled.dst_tokens;
+            let static_len = compiled.static_len;
+
+            let template_static = quote! {
+                #[doc(hidden)]
+                static #template_ident: #apigate_path::RewriteTemplate = #apigate_path::RewriteTemplate {
+                    src: &[#(#src_tokens),*],
+                    dst: &[#(#dst_tokens),*],
+                    static_len: #static_len,
+                };
+            };
+
+            let template_item: Item = syn::parse2(template_static)?;
+            generated_items.push(template_item);
+
+            quote!(#apigate_path::RewriteSpec::Template(&#template_ident))
+        }
+    };
 
     let before = generate_before_wrapper(apigate_path, f, &args.before, &mut generated_items)?;
     let map = generate_map_wrapper(
@@ -225,7 +252,7 @@ fn extract_route_from_fn(
         #apigate_path::RouteDef {
             method: #method,
             path: #path,
-            to: #to,
+            rewrite: #rewrite_spec,
             policy: #policy,
             before: #before,
             map: #map,
@@ -690,6 +717,73 @@ fn ensure_single_data_kind(current: DataKind, next: DataKind) -> Result<DataKind
             "only one of `query`, `json`, `form`, or `multipart` may be specified",
         )),
     }
+}
+
+struct CompiledTemplate {
+    src_tokens: Vec<TokenStream2>,
+    dst_tokens: Vec<TokenStream2>,
+    static_len: usize,
+}
+
+fn compile_rewrite_template(
+    apigate_path: &TokenStream2,
+    route_path: &str,
+    to: &str,
+) -> Result<CompiledTemplate, String> {
+    // Parse source segments from the route path
+    let mut src_tokens = Vec::new();
+    let mut param_names: Vec<String> = Vec::new();
+
+    for seg in route_path.split('/').filter(|s| !s.is_empty()) {
+        if seg.starts_with('{') && seg.ends_with('}') {
+            let name = &seg[1..seg.len() - 1];
+            param_names.push(name.to_string());
+            src_tokens.push(quote!(#apigate_path::SrcSeg::Param));
+        } else {
+            src_tokens.push(quote!(#apigate_path::SrcSeg::Lit(#seg)));
+        }
+    }
+
+    // Build param name -> capture index map
+    let param_map: HashMap<String, u8> = param_names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| (name.clone(), i as u8))
+        .collect();
+
+    // Parse destination chunks
+    let mut dst_tokens = Vec::new();
+    let mut static_len = 0usize;
+    let mut rest = to;
+
+    while !rest.is_empty() {
+        if let Some(brace_start) = rest.find('{') {
+            if brace_start > 0 {
+                let lit = &rest[..brace_start];
+                static_len += lit.len();
+                dst_tokens.push(quote!(#apigate_path::DstChunk::Lit(#lit)));
+            }
+            let brace_end = rest
+                .find('}')
+                .ok_or_else(|| "unclosed `{` in `to`".to_string())?;
+            let param_name = &rest[brace_start + 1..brace_end];
+            let &src_index = param_map.get(param_name).ok_or_else(|| {
+                format!("parameter `{param_name}` in `to` not found in route path")
+            })?;
+            dst_tokens.push(quote!(#apigate_path::DstChunk::Capture { src_index: #src_index }));
+            rest = &rest[brace_end + 1..];
+        } else {
+            static_len += rest.len();
+            dst_tokens.push(quote!(#apigate_path::DstChunk::Lit(#rest)));
+            break;
+        }
+    }
+
+    Ok(CompiledTemplate {
+        src_tokens,
+        dst_tokens,
+        static_len,
+    })
 }
 
 // --- optional: заглушки, чтобы если кто-то случайно использует #[apigate::get] вне #[apigate::service],
