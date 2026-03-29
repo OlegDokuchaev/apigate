@@ -4,11 +4,6 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
-struct SaleIdPath {
-    id: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct ProductsQueryPublic {
     page: Option<u32>,
     size: Option<u32>,
@@ -167,12 +162,8 @@ mod sales {
     )]
     async fn secure_user_profile() {}
 
-    // Path parameter (StripPrefix — forwards as-is after stripping prefix)
-    #[apigate::get(
-        "/{id}",
-        path = SaleIdPath,
-        before = [mark_demo_request]
-    )]
+    // Path parameter
+    #[apigate::get("/{id}", before = [mark_demo_request])]
     async fn get_by_id() {}
 
     // Rewrite template: /sales/item/{id}/review → /api/v2/reviews/{id}
@@ -183,7 +174,7 @@ mod sales {
     #[apigate::get(
         "/products",
         query = ProductsQueryPublic,
-        map = remap_products_query
+        map = remap_products_query,
     )]
     async fn get_products() {}
 
