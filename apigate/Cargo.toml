@@ -1,11 +1,18 @@
 [package]
 name = "apigate"
-version = "0.1.0"
-edition = "2024"
+description = "Macro-driven API gateway for Rust — declarative routing, request transformation, and reverse proxying built on axum"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "../README.md"
+keywords = ["api-gateway", "proxy", "reverse-proxy", "axum", "macros"]
+categories = ["web-programming::http-server", "network-programming"]
 
 [dependencies]
-apigate-core = { path = "../apigate-core" }
-apigate-macros = { path = "../apigate-macros" }
+apigate-core = { path = "../apigate-core", version = "0.1.0" }
+apigate-macros = { path = "../apigate-macros", version = "0.1.0" }
 axum = "0.8.8"
 http = "1.4.0"
 serde_json = "1.0.149"

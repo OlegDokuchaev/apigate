@@ -1,18 +1,21 @@
 [package]
 name = "apigate-core"
-version = "0.1.0"
-edition = "2024"
+description = "Core runtime for apigate — routing, proxying, load balancing, and request context"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "../README.md"
+keywords = ["api-gateway", "proxy", "reverse-proxy", "load-balancing"]
+categories = ["web-programming::http-server", "network-programming"]
 
 [dependencies]
-# server/router "внутри", наружу не отдаём
 axum = { version = "0.8", features = ["tokio", "http1", "http2"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
-
-# клиент к upstream (streaming)
 hyper = { version = "1", features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["tokio", "client", "client-legacy"] }
 http-body-util = "0.1"
-
 http = "1"
 bytes = "1"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }

@@ -1,3 +1,10 @@
 [workspace]
 resolver = "2"
 members = ["apigate", "apigate-core", "apigate-macros"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/OlegDokuchaev/apigate"
+authors = ["Oleg Dokuchaev"]
