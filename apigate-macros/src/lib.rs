@@ -22,7 +22,6 @@ pub fn service(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Expands `#[apigate::service(name = "...", prefix = "...")]` on a module:
 /// iterates functions, expands routes, and injects a `routes()` entrypoint.
 fn expand_service(args: TokenStream, input: TokenStream) -> syn::Result<TokenStream2> {
-    // Parse args
     let args = syn::parse::<ServiceArgs>(args)?;
     let ServiceArgs {
         name,
@@ -30,7 +29,6 @@ fn expand_service(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         policy,
     } = args;
 
-    // Parse module
     let mut module = syn::parse::<ItemMod>(input)?;
     let apigate_path = apigate_crate_path()?;
 
@@ -46,7 +44,6 @@ fn expand_service(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 
     for item in items.iter_mut() {
         if let Item::Fn(f) = item {
-            // Extract route metadata and remove apigate-specific attributes from the function
             if let Some(extracted) = expand_route_from_fn(&apigate_path, f)? {
                 route_defs.push(extracted.route_def);
                 generated_items.extend(extracted.generated_items);
@@ -63,7 +60,6 @@ fn expand_service(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         Some(p) => quote!(Some(#p)),
     };
 
-    // Inject generated items + service metadata back into the module
     items.extend(generated_items);
     items.push(syn::parse_quote! {
         #[doc(hidden)]
@@ -72,7 +68,6 @@ fn expand_service(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         ];
     });
 
-    // Public entrypoint to retrieve routes for this service
     items.push(syn::parse_quote! {
         pub fn routes() -> #apigate_path::Routes {
             #apigate_path::Routes {
@@ -89,8 +84,7 @@ fn expand_service(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 
 #[proc_macro_attribute]
 pub fn hook(_args: TokenStream, input: TokenStream) -> TokenStream {
-    // Пока hook — identity macro.
-    // Позже сюда можно добавить валидацию сигнатуры.
+    // Identity macro for now; signature validation can be added later.
     input
 }
 
