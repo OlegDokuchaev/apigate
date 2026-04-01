@@ -1,11 +1,10 @@
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
-use syn::punctuated::Punctuated;
 use syn::{Attribute, Error, Ident, Item, ItemFn, LitStr, Path, Result, Token, Type};
 
 use crate::codegen::{generate_before_wrapper, generate_map_wrapper};
-use crate::parse::{parse_assigned, parse_bracketed_paths, required, set_once};
+use crate::parse::{parse_assigned, parse_bracketed_paths, set_once};
 use crate::template::compile_rewrite_template;
 
 // ---------------------------------------------------------------------------
@@ -147,7 +146,6 @@ impl RouteArgs {
 
 #[derive(Default)]
 struct RouteArgsBuilder {
-    path: Option<LitStr>,
     to: Option<LitStr>,
     policy: Option<LitStr>,
     before: Option<Vec<Path>>,
@@ -158,7 +156,6 @@ struct RouteArgsBuilder {
 impl RouteArgsBuilder {
     fn apply(&mut self, arg: RouteArg) -> Result<()> {
         match arg {
-            RouteArg::Path(v) => set_once(&mut self.path, v.clone(), v.span(), "path")?,
             RouteArg::To(v) => set_once(&mut self.to, v.clone(), v.span(), "to")?,
             RouteArg::Policy(v) => set_once(&mut self.policy, v.clone(), v.span(), "policy")?,
             RouteArg::Before(v) => {
@@ -186,9 +183,9 @@ impl RouteArgsBuilder {
         Ok(())
     }
 
-    fn build(self) -> Result<RouteArgs> {
+    fn build(self, path: LitStr) -> Result<RouteArgs> {
         let args = RouteArgs {
-            path: required(self.path, Span::call_site(), "missing route path")?,
+            path,
             to: self.to,
             policy: self.policy,
             before: self.before.unwrap_or_default(),
@@ -210,7 +207,6 @@ enum RouteFlag {
 }
 
 enum RouteArg {
-    Path(LitStr),
     To(LitStr),
     Policy(LitStr),
     Before(Vec<Path>),
@@ -223,16 +219,10 @@ enum RouteArg {
 
 impl Parse for RouteArg {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
-        if input.peek(LitStr) {
-            return Ok(Self::Path(input.parse()?));
-        }
-
         let key: Ident = input.parse()?;
 
         if input.peek(Token![=]) {
-            if key == "path" {
-                Ok(Self::Path(parse_assigned(input)?))
-            } else if key == "to" {
+            if key == "to" {
                 Ok(Self::To(parse_assigned(input)?))
             } else if key == "policy" {
                 Ok(Self::Policy(parse_assigned(input)?))
@@ -251,7 +241,7 @@ impl Parse for RouteArg {
                 Err(Error::new(
                     key.span(),
                     "unknown route argument, expected one of: \
-                     `path`, `to`, `policy`, `before`, `map`, `query`, `json`, `form`",
+                     `to`, `policy`, `before`, `map`, `query`, `json`, `form`",
                 ))
             }
         } else if key == "multipart" {
@@ -267,14 +257,19 @@ impl Parse for RouteArg {
 
 impl Parse for RouteArgs {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let items = input.call(Punctuated::<RouteArg, Token![,]>::parse_terminated)?;
+        let path: LitStr = input.parse()?;
 
         let mut builder = RouteArgsBuilder::default();
-        for item in items {
-            builder.apply(item)?;
+
+        while input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+            if input.is_empty() {
+                break;
+            }
+            builder.apply(input.parse()?)?;
         }
 
-        builder.build()
+        builder.build(path)
     }
 }
 
