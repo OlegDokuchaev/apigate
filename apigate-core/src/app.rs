@@ -250,9 +250,9 @@ async fn proxy_handler(
     if let Some(pipeline) = meta.pipeline {
         let (mut parts, body) = req.into_parts();
         let ctx = PartsCtx::new(meta.service, meta.route_path, &mut parts);
-        let mut scope = RequestScope::new();
+        let scope = RequestScope::new(body, inner.map_body_limit);
 
-        let body = match pipeline(ctx, &mut scope, body, inner.map_body_limit).await {
+        let body = match pipeline(ctx, scope).await {
             Ok(body) => body,
             Err(err) => return err.into_response(),
         };
