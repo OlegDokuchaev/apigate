@@ -2,9 +2,8 @@ mod app;
 mod backend;
 mod balancing;
 mod error;
-mod hook;
-mod map;
 mod parts_ctx;
+mod pipeline;
 mod policy;
 mod proxy;
 mod route;
@@ -12,9 +11,10 @@ mod routing;
 
 pub use app::{App, AppBuilder, run};
 pub use error::ApigateError;
-pub use hook::{BeforeFn, BeforeFuture, HookResult};
-pub use map::{MapFn, MapFuture, MapRequestResult, MapResult};
 pub use parts_ctx::PartsCtx;
+pub use pipeline::{
+    HookResult, MapResult, PipelineFn, PipelineFuture, PipelineResult, RequestScope,
+};
 pub use route::{DstChunk, RewriteSpec, RewriteTemplate, SrcSeg};
 
 #[derive(Clone, Copy, Debug)]
@@ -34,8 +34,7 @@ pub struct RouteDef {
     pub path: &'static str,
     pub rewrite: RewriteSpec,
     pub policy: Option<&'static str>,
-    pub before: Option<BeforeFn>,
-    pub map: Option<MapFn>,
+    pub pipeline: Option<PipelineFn>,
 }
 
 #[derive(Clone, Copy, Debug)]

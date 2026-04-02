@@ -18,7 +18,7 @@ use crate::policy::Policy;
 use crate::proxy::{bad_gateway, proxy_request};
 use crate::route::{FixedRewrite, Rewrite, RewriteSpec, RouteMeta};
 use crate::routing::{NoRouteKey, RouteCtx};
-use crate::{Method, PartsCtx, Routes};
+use crate::{Method, PartsCtx, RequestScope, Routes};
 
 struct Inner {
     backends: HashMap<String, BackendPool>,
@@ -179,8 +179,7 @@ fn mount_service(
                 RewriteSpec::Template(tpl) => Rewrite::Template(tpl),
             },
             policy,
-            before: rd.before,
-            map: rd.map,
+            pipeline: rd.pipeline,
         };
 
         let method_router = method_router(rd.method).layer(Extension(meta));
@@ -247,24 +246,13 @@ async fn proxy_handler(
         return bad_gateway(format!("unknown backend `{}`", meta.service));
     };
 
-    // Before hook
-    if let Some(before) = meta.before {
+    // Pipeline: before hooks + body validation/map in a single pass
+    if let Some(pipeline) = meta.pipeline {
         let (mut parts, body) = req.into_parts();
         let ctx = PartsCtx::new(meta.service, meta.route_path, &mut parts);
+        let mut scope = RequestScope::new();
 
-        if let Err(err) = before(ctx).await {
-            return err.into_response();
-        }
-
-        req = http::Request::from_parts(parts, body);
-    }
-
-    // Map
-    if let Some(map) = meta.map {
-        let (mut parts, body) = req.into_parts();
-        let ctx = PartsCtx::new(meta.service, meta.route_path, &mut parts);
-
-        let body = match map(ctx, body, inner.map_body_limit).await {
+        let body = match pipeline(ctx, &mut scope, body, inner.map_body_limit).await {
             Ok(body) => body,
             Err(err) => return err.into_response(),
         };

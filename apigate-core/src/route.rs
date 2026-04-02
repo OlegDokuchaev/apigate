@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use http::uri::PathAndQuery;
 
+use crate::PipelineFn;
 use crate::policy::Policy;
-use crate::{BeforeFn, MapFn};
 
 #[derive(Clone)]
 pub struct RouteMeta {
@@ -12,8 +12,7 @@ pub struct RouteMeta {
     pub prefix: &'static str,
     pub rewrite: Rewrite,
     pub policy: Arc<Policy>,
-    pub before: Option<BeforeFn>,
-    pub map: Option<MapFn>,
+    pub pipeline: Option<PipelineFn>,
 }
 
 #[derive(Clone, Debug)]
