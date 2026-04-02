@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use axum::body::Body;
 use http::Extensions;
@@ -12,8 +13,12 @@ use crate::error::ApigateError;
 // ---------------------------------------------------------------------------
 
 /// Owns the request body and extracted data for a single pipeline invocation.
-/// Consumed by the pipeline — body is read/transformed inside, result returned.
+///
+/// Two-layer extensions:
+/// - `shared` — app-level state from `AppBuilder::state()`, shared via `Arc` (zero-copy per request)
+/// - `extensions` — per-request data (path params, parsed input, etc.)
 pub struct RequestScope {
+    shared: Arc<Extensions>,
     extensions: Extensions,
     body: Option<Body>,
     body_limit: usize,
@@ -22,14 +27,24 @@ pub struct RequestScope {
 impl RequestScope {
     pub fn new(body: Body, body_limit: usize) -> Self {
         Self {
+            shared: Arc::new(Extensions::new()),
             extensions: Extensions::new(),
             body: Some(body),
             body_limit,
         }
     }
 
-    pub fn take_body(&mut self) -> Body {
-        self.body.take().expect("request body already consumed")
+    pub fn with_state(shared: Arc<Extensions>, body: Body, body_limit: usize) -> Self {
+        Self {
+            shared,
+            extensions: Extensions::new(),
+            body: Some(body),
+            body_limit,
+        }
+    }
+
+    pub fn take_body(&mut self) -> Option<Body> {
+        self.body.take()
     }
 
     pub fn body_limit(&self) -> usize {
@@ -37,7 +52,9 @@ impl RequestScope {
     }
 
     pub fn get<T: Clone + Send + Sync + 'static>(&self) -> Option<&T> {
-        self.extensions.get::<T>()
+        self.extensions
+            .get::<T>()
+            .or_else(|| self.shared.get::<T>())
     }
 
     pub fn insert<T: Clone + Send + Sync + 'static>(&mut self, val: T) {

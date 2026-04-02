@@ -33,7 +33,11 @@ async fn main() -> anyhow::Result<()> {
         // Backend-пулы
         .backend("sales", cfg.sales_backends)
         .backend("files", cfg.files_backends)
-        
+
+        // Общий state (доступен в хуках/map через scope.get::<T>())
+        .state(cfg.db_pool.clone())
+        .state(cfg.auth_config.clone())
+
         // Общий timeout по умолчанию
         .default_timeout(std::time::Duration::from_millis(cfg.default_timeout_ms))
 
@@ -446,14 +450,42 @@ async fn get_user_sales() {}
 
 ---
 
+## Custom State
+
+Пользовательский state задаётся в `main` через `.state()` и доступен в хуках/map через `RequestScope`:
+
+```rust
+#[derive(Clone)]
+struct DbPool(Arc<Pool>);
+
+#[derive(Clone)]
+struct AuthConfig {
+    jwt_secret: String,
+}
+
+let app = apigate::App::builder()
+    .state(DbPool(pool.clone()))
+    .state(AuthConfig { jwt_secret: "...".into() })
+    .backend("sales", ["http://127.0.0.1:8081"])
+    .mount(sales::routes())
+    .build()?;
+```
+
+Можно вызывать `.state()` несколько раз с разными типами. Каждый тип доступен по `scope.get::<T>()`.
+
+> Для тяжёлых типов используйте `Arc<T>` — `.state()` клонирует значение на каждый запрос.
+
+---
+
 ## Производительность
 
 `apigate` спроектирован так, чтобы по умолчанию проксировать запросы с минимальными накладными расходами:
 
-* если нет `map`, тело запроса проксируется дальше без преобразования;
-* `before`-хуки работают только с частями запроса;
+* если не указан `json / query / form`, тело запроса проксируется без чтения;
+* если указан `json = T` без `map`, тело валидируется (parse + проверка) и проксируется как есть;
+* `before`-хуки работают только с частями запроса (до чтения body);
 * `multipart` по умолчанию проксируется как passthrough;
-* разбор `Json / Query / Form` выполняется только если он явно указан в маршруте.
+* все хуки, валидация и map выполняются в одном pipeline (один `Box::pin`, без повторной разборки запроса).
 
 ---
 
@@ -465,7 +497,8 @@ async fn get_user_sales() {}
 
 2. Если `to` не указан, используется `path`.
 
-3. Для `map` маршрут должен объявлять соответствующий тип входа:
+3. `json = T` / `query = T` / `form = T` можно использовать без `map` — для валидации входящего запроса.
+   Для `map` маршрут должен объявлять соответствующий тип:
 
    * `json = T` + `map = ...`
    * `query = T` + `map = ...`

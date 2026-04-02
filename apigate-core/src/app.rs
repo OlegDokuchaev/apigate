@@ -23,8 +23,9 @@ use crate::{Method, PartsCtx, RequestScope, Routes};
 struct Inner {
     backends: HashMap<String, BackendPool>,
     client: Client<hyper_util::client::legacy::connect::HttpConnector, Body>,
+    state: Arc<http::Extensions>,
     map_body_limit: usize,
-    _default_timeout: Duration, // пока не используется
+    _default_timeout: Duration,
 }
 
 pub struct App {
@@ -38,6 +39,7 @@ pub struct AppBuilder {
     default_policy: Arc<Policy>,
     default_timeout: Duration,
     map_body_limit: usize,
+    state: http::Extensions,
 }
 
 impl AppBuilder {
@@ -49,6 +51,7 @@ impl AppBuilder {
             default_policy: Arc::new(Policy::new().router(NoRouteKey).balancer(RoundRobin::new())),
             default_timeout: Duration::from_secs(30),
             map_body_limit: 2 * 1024 * 1024,
+            state: http::Extensions::new(),
         }
     }
 
@@ -84,6 +87,11 @@ impl AppBuilder {
         self
     }
 
+    pub fn state<T: Clone + Send + Sync + 'static>(mut self, val: T) -> Self {
+        self.state.insert(val);
+        self
+    }
+
     pub fn mount(mut self, routes: Routes) -> Self {
         self.mounted.push(routes);
         self
@@ -106,6 +114,7 @@ impl AppBuilder {
         let inner = Arc::new(Inner {
             backends: pools,
             client,
+            state: Arc::new(self.state),
             _default_timeout: self.default_timeout,
             map_body_limit: self.map_body_limit,
         });
@@ -250,7 +259,7 @@ async fn proxy_handler(
     if let Some(pipeline) = meta.pipeline {
         let (mut parts, body) = req.into_parts();
         let ctx = PartsCtx::new(meta.service, meta.route_path, &mut parts);
-        let scope = RequestScope::new(body, inner.map_body_limit);
+        let scope = RequestScope::with_state(inner.state.clone(), body, inner.map_body_limit);
 
         let body = match pipeline(ctx, scope).await {
             Ok(body) => body,
