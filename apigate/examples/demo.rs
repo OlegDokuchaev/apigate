@@ -17,7 +17,7 @@ struct ProductsQueryService {
     query: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct PublicBuyInput {
     sale_ids: Vec<Uuid>,
     coupon: Option<String>,
@@ -79,7 +79,6 @@ async fn mark_demo_request(ctx: &mut apigate::PartsCtx<'_>) -> apigate::HookResu
 #[apigate::map]
 async fn remap_products_query(
     input: ProductsQueryPublic,
-    _ctx: &mut apigate::PartsCtx<'_>,
 ) -> apigate::MapResult<ProductsQueryService> {
     let page = input.page.unwrap_or(1).max(1);
     let size = input.size.unwrap_or(20).clamp(1, 100);
@@ -95,10 +94,7 @@ async fn remap_products_query(
 }
 
 #[apigate::map]
-async fn remap_buy_json(
-    input: PublicBuyInput,
-    _ctx: &mut apigate::PartsCtx<'_>,
-) -> apigate::MapResult<ServiceBuyInput> {
+async fn remap_buy_json(input: PublicBuyInput) -> apigate::MapResult<ServiceBuyInput> {
     let promo_code = input
         .coupon
         .map(|v| v.trim().to_uppercase())
@@ -119,10 +115,7 @@ async fn remap_buy_json(
 }
 
 #[apigate::map]
-async fn remap_legacy_form(
-    input: LegacyFormPublic,
-    _ctx: &mut apigate::PartsCtx<'_>,
-) -> apigate::MapResult<LegacyFormService> {
+async fn remap_legacy_form(input: LegacyFormPublic) -> apigate::MapResult<LegacyFormService> {
     let category_code = match input.category.trim().to_lowercase().as_str() {
         "pets" => "P",
         "items" => "I",
