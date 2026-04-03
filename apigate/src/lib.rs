@@ -8,7 +8,8 @@ pub mod __private {
 }
 
 pub use apigate_core::{
-    ApigateError, App, AppBuilder, BeforeFn, BeforeFuture, DstChunk, HookResult, MapFn, MapFuture,
-    MapResult, Method, PartsCtx, RewriteSpec, RewriteTemplate, RouteDef, Routes, SrcSeg, run,
+    ApigateError, App, AppBuilder, DstChunk, HookResult, MapResult, Method, PartsCtx, PipelineFn,
+    PipelineFuture, PipelineResult, RequestScope, RewriteSpec, RewriteTemplate, RouteDef, Routes,
+    SrcSeg, run,
 };
 pub use apigate_macros::*;
