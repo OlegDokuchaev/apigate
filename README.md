@@ -242,6 +242,68 @@ async fn get_user_sales() {}
 
 ---
 
+## Параметры `hook` и `map`
+
+`#[apigate::hook]` и `#[apigate::map]` поддерживают гибкую инъекцию параметров. Макрос анализирует тип каждого параметра и автоматически генерирует код извлечения:
+
+| Тип параметра | Откуда берётся | Пример |
+|---|---|---|
+| `&mut PartsCtx<'_>` | Контекст запроса (заголовки, URI) | `ctx: &mut PartsCtx<'_>` |
+| `&mut RequestScope` | Прямой доступ к scope | `scope: &mut RequestScope` |
+| `&T` | `scope.get::<T>()` — ссылка на state | `db: &DbPool` |
+| `T` (owned, только в hook) | `scope.take::<T>()` — забрать из scope | `path: SaleIdPath` |
+| `T` (первый owned в map) | Передаётся напрямую (input) | `input: PublicBuyInput` |
+
+Все параметры опциональны — указывайте только то, что нужно.
+
+### Примеры
+
+```rust
+// Минимальный хук — без параметров
+#[apigate::hook]
+async fn log_request() -> apigate::HookResult {
+    Ok(())
+}
+
+// Только ctx
+#[apigate::hook]
+async fn verify_api_key(ctx: &mut apigate::PartsCtx<'_>) -> apigate::HookResult {
+    let key = ctx.header("x-api-key")
+        .ok_or_else(|| apigate::ApigateError::forbidden("missing api key"))?;
+    Ok(())
+}
+
+// ctx + state из AppBuilder::state()
+#[apigate::hook]
+async fn auth_hook(ctx: &mut apigate::PartsCtx<'_>, config: &AuthConfig) -> apigate::HookResult {
+    // config извлекается из scope автоматически
+    Ok(())
+}
+
+// Прямой доступ к scope (для scope.insert / scope.take)
+#[apigate::hook]
+async fn enrich(scope: &mut apigate::RequestScope) -> apigate::HookResult {
+    scope.insert(MyCustomData { /* ... */ });
+    Ok(())
+}
+
+// map: первый owned-параметр — это input (передаётся напрямую, не из scope)
+#[apigate::map]
+async fn remap(input: PublicInput, config: &AuthConfig) -> apigate::MapResult<ServiceInput> {
+    // input — распарсенное тело запроса
+    // config — state из scope
+    Ok(ServiceInput { /* ... */ })
+}
+```
+
+### Ограничения
+
+* `&mut PartsCtx<'_>` и `&mut RequestScope` — максимум по одному
+* `&mut T` для произвольного `T` не поддерживается (только `&T`)
+* `&mut RequestScope` нельзя совмещать с `&T`-параметрами (конфликт мутабельного и иммутабельного borrow)
+
+---
+
 ## Преобразование данных (`map`)
 
 `map` — это типизированное преобразование входных данных перед отправкой в сервис.
@@ -284,7 +346,6 @@ struct ServiceBuyInput {
 #[apigate::map]
 async fn remap_buy_json(
     input: PublicBuyInput,
-    _ctx: &mut apigate::PartsCtx<'_>,
 ) -> apigate::MapResult<ServiceBuyInput> {
     Ok(ServiceBuyInput {
         sale_ids: input.sale_ids,
@@ -333,7 +394,6 @@ struct ProductsQueryService {
 #[apigate::map]
 async fn remap_products_query(
     input: ProductsQueryPublic,
-    _ctx: &mut apigate::PartsCtx<'_>,
 ) -> apigate::MapResult<ProductsQueryService> {
     let page = input.page.unwrap_or(1).max(1);
     let size = input.size.unwrap_or(20).clamp(1, 100);
@@ -377,7 +437,6 @@ struct LegacyFormService {
 #[apigate::map]
 async fn remap_legacy_form(
     input: LegacyFormPublic,
-    _ctx: &mut apigate::PartsCtx<'_>,
 ) -> apigate::MapResult<LegacyFormService> {
     let code = match input.category.as_str() {
         "pets" => "P",
@@ -452,7 +511,7 @@ async fn get_user_sales() {}
 
 ## Custom State
 
-Пользовательский state задаётся в `main` через `.state()` и доступен в хуках/map через `RequestScope`:
+Пользовательский state задаётся в `main` через `.state()` и автоматически доступен как `&T`-параметр в хуках и map:
 
 ```rust
 #[derive(Clone)]
@@ -471,9 +530,17 @@ let app = apigate::App::builder()
     .build()?;
 ```
 
-Можно вызывать `.state()` несколько раз с разными типами. Каждый тип доступен по `scope.get::<T>()`.
+Доступ в хуках — просто добавьте `&T` параметр:
 
-> Для тяжёлых типов используйте `Arc<T>` — `.state()` клонирует значение на каждый запрос.
+```rust
+#[apigate::hook]
+async fn auth(ctx: &mut apigate::PartsCtx<'_>, config: &AuthConfig) -> apigate::HookResult {
+    // config доступен автоматически из state
+    Ok(())
+}
+```
+
+> Для тяжёлых типов используйте `Arc<T>` — state клонируется на каждый запрос, имеющий pipeline.
 
 ---
 
