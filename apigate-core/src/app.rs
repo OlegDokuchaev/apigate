@@ -23,7 +23,7 @@ use crate::{Method, PartsCtx, RequestScope, Routes};
 struct Inner {
     backends: HashMap<String, BackendPool>,
     client: Client<hyper_util::client::legacy::connect::HttpConnector, Body>,
-    state: Arc<http::Extensions>,
+    state: http::Extensions,
     map_body_limit: usize,
     _default_timeout: Duration,
 }
@@ -114,7 +114,7 @@ impl AppBuilder {
         let inner = Arc::new(Inner {
             backends: pools,
             client,
-            state: Arc::new(self.state),
+            state: self.state,
             _default_timeout: self.default_timeout,
             map_body_limit: self.map_body_limit,
         });

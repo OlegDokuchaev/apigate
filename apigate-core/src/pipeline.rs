@@ -1,6 +1,5 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 
 use axum::body::Body;
 use http::Extensions;
@@ -14,11 +13,9 @@ use crate::error::ApigateError;
 
 /// Owns the request body and extracted data for a single pipeline invocation.
 ///
-/// Two-layer extensions:
-/// - `shared` — app-level state from `AppBuilder::state()`, shared via `Arc` (zero-copy per request)
-/// - `extensions` — per-request data (path params, parsed input, etc.)
+/// Pre-populated with cloned app state, then enriched with per-request data
+/// (parsed input, path params, etc.) during the pipeline.
 pub struct RequestScope {
-    shared: Arc<Extensions>,
     extensions: Extensions,
     body: Option<Body>,
     body_limit: usize,
@@ -27,17 +24,15 @@ pub struct RequestScope {
 impl RequestScope {
     pub fn new(body: Body, body_limit: usize) -> Self {
         Self {
-            shared: Arc::new(Extensions::new()),
             extensions: Extensions::new(),
             body: Some(body),
             body_limit,
         }
     }
 
-    pub fn with_state(shared: Arc<Extensions>, body: Body, body_limit: usize) -> Self {
+    pub(crate) fn with_state(state: Extensions, body: Body, body_limit: usize) -> Self {
         Self {
-            shared,
-            extensions: Extensions::new(),
+            extensions: state,
             body: Some(body),
             body_limit,
         }
@@ -51,14 +46,16 @@ impl RequestScope {
         self.body_limit
     }
 
-    pub fn get<T: Clone + Send + Sync + 'static>(&self) -> Option<&T> {
-        self.extensions
-            .get::<T>()
-            .or_else(|| self.shared.get::<T>())
+    pub fn get<T: Send + Sync + 'static>(&self) -> Option<&T> {
+        self.extensions.get::<T>()
     }
 
     pub fn insert<T: Clone + Send + Sync + 'static>(&mut self, val: T) {
         self.extensions.insert(val);
+    }
+
+    pub fn take<T: Send + Sync + 'static>(&mut self) -> Option<T> {
+        self.extensions.remove::<T>()
     }
 }
 
@@ -72,6 +69,5 @@ pub type PipelineFn = for<'a> fn(PartsCtx<'a>, RequestScope) -> PipelineFuture<'
 pub type PipelineFuture<'a> = Pin<Box<dyn Future<Output = PipelineResult> + Send + 'a>>;
 pub type PipelineResult = Result<Body, ApigateError>;
 
-// User-facing return types for hook/map functions
 pub type HookResult = Result<(), ApigateError>;
 pub type MapResult<T> = Result<T, ApigateError>;
