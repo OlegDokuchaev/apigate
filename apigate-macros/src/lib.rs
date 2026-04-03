@@ -1,4 +1,5 @@
 mod codegen;
+mod expand;
 mod parse;
 mod route;
 mod service;
@@ -9,6 +10,7 @@ use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
 use syn::{Item, ItemMod, parse_macro_input};
 
+use expand::expand_fn_params;
 use route::expand_route_from_fn;
 use service::ServiceArgs;
 
@@ -84,17 +86,20 @@ fn expand_service(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 
 #[proc_macro_attribute]
 pub fn hook(_args: TokenStream, input: TokenStream) -> TokenStream {
-    // Identity macro for now; signature validation can be added later.
-    input
+    expand_fn_params(input, "hook", false)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }
 
 #[proc_macro_attribute]
 pub fn map(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input
+    expand_fn_params(input, "map", true)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }
 
 /// Resolves the path to the `apigate` crate for use in generated code.
-fn apigate_crate_path() -> Result<TokenStream2, syn::Error> {
+pub(crate) fn apigate_crate_path() -> Result<TokenStream2, syn::Error> {
     use proc_macro_crate::{FoundCrate, crate_name};
 
     match crate_name("apigate") {

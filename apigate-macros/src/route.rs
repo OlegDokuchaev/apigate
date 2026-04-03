@@ -3,7 +3,7 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{Attribute, Error, Ident, Item, ItemFn, LitStr, Path, Result, Token, Type};
 
-use crate::codegen::{generate_before_wrapper, generate_map_wrapper};
+use crate::codegen::generate_pipeline_wrapper;
 use crate::parse::{parse_assigned, parse_bracketed_paths, set_once};
 use crate::template::compile_rewrite_template;
 
@@ -302,12 +302,10 @@ pub(crate) fn expand_route_from_fn(
     let rewrite_spec =
         build_rewrite_spec(apigate_path, &matched.args.path, matched.args.to.as_ref())?;
 
-    let before =
-        generate_before_wrapper(apigate_path, f, &matched.args.before, &mut generated_items)?;
-
-    let map = generate_map_wrapper(
+    let pipeline = generate_pipeline_wrapper(
         apigate_path,
         f,
+        &matched.args.before,
         &matched.args.data,
         matched.args.map.as_ref(),
         &mut generated_items,
@@ -327,8 +325,7 @@ pub(crate) fn expand_route_from_fn(
             path: #path,
             rewrite: #rewrite_spec,
             policy: #policy,
-            before: #before,
-            map: #map,
+            pipeline: #pipeline,
         }
     };
 
