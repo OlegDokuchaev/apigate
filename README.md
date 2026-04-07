@@ -1,28 +1,12 @@
 # ApiGate
 
-`apigate` — библиотека для единой точки входа (прокси) в микросервисной системе на Rust.
+Типизированный API-шлюз (reverse proxy) для микросервисов на Rust.
 
-Что делает библиотека:
-
-* генерирует маршруты через макросы;
-* типизированно извлекает `Path / Query / Json / Form / Multipart`;
-* позволяет запускать пользовательские хуки (`before`) для аутентификации/валидации/обновления заголовков;
-* позволяет типизированно преобразовывать `Json / Query / Form` через `map`;
-* применяет runtime-политики (таймауты, балансировка, маршрутизация), заданные в `main`;
-* использует `axum` во внутренней реализации (публично используется только API `apigate`).
+Макросы генерируют маршруты с валидацией `Path / Query / Json / Form / Multipart`, хуками `before`, преобразованием `map` и runtime-политиками (балансировка, routing, таймауты). Внутри — `axum`, снаружи — только API `apigate`.
 
 ---
 
 ## Быстрый старт
-
-### 1) `main`: конфиги и runtime-настройки
-
-Все runtime-параметры задаются в `main`:
-
-* backend-адреса,
-* таймауты,
-* балансировка,
-* стратегия маршрутизации.
 
 ```rust
 #[tokio::main]
@@ -30,39 +14,21 @@ async fn main() -> anyhow::Result<()> {
     let cfg = AppConfig::from_env();
 
     let app = apigate::App::builder()
-        // Backend-пулы
         .backend("sales", cfg.sales_backends)
         .backend("files", cfg.files_backends)
-
-        // Общий state (доступен в хуках/map через scope.get::<T>())
         .state(cfg.db_pool.clone())
         .state(cfg.auth_config.clone())
-
-        // Таймаут на весь upstream-запрос (504 при превышении)
-        .request_timeout(std::time::Duration::from_millis(cfg.request_timeout_ms))
-        // Таймаут на TCP-подключение к backend'у
-        .connect_timeout(std::time::Duration::from_secs(5))
-        // Время жизни idle-соединений в пуле
-        .pool_idle_timeout(std::time::Duration::from_secs(90))
-
-        // Политики
+        .request_timeout(std::time::Duration::from_secs(10))
+        .connect_timeout(std::time::Duration::from_secs(3))
+        .pool_idle_timeout(std::time::Duration::from_secs(60))
         .policy(
             "sales_default",
             apigate::Policy::new()
                 .router(apigate::routing::HeaderSticky::new("x-user-id"))
                 .balancer(apigate::balancing::ConsistentHash::new()),
         )
-        .policy(
-            "files_default",
-            apigate::Policy::new()
-                .router(apigate::routing::NoRouteKey)
-                .balancer(apigate::balancing::RoundRobin::new()),
-        )
-
-        // Подключаем сгенерированные маршруты
         .mount(sales::routes!())
         .mount(files::routes!())
-
         .build()?;
 
     apigate::run(cfg.listen, app).await
@@ -73,539 +39,6 @@ async fn main() -> anyhow::Result<()> {
 
 ## Сервис
 
-Сервис описывается модулем с `#[apigate::service]`.
-
-* `name` — имя сервиса (и ключ backend-пула в `main`)
-* `prefix` — внешний префикс
-* `policy` — политика по умолчанию
-
-```rust
-#[apigate::service(
-    name = "sales",
-    prefix = "/sales",
-    policy = "sales_default"
-)]
-mod sales {
-    // маршруты
-}
-```
-
----
-
-## Маршруты
-
-### Простой `GET`
-
-```rust
-#[apigate::get("/ping")]
-async fn ping() {}
-```
-
-### Путь по умолчанию (`to` не нужен)
-
-Если `to` не указан, библиотека считает:
-
-* `to == path`
-
-То есть `#[apigate::get("/ping")]` проксирует в `/ping`.
-
-### Переопределение пути в целевом сервисе
-
-```rust
-#[apigate::get("/public-products", to = "/internal/products")]
-async fn products() {}
-```
-
----
-
-## Типизированные входные данные
-
-### `Path`
-
-Используется синтаксис путей `/{id}`.
-
-```rust
-#[derive(serde::Deserialize)]
-struct SaleIdPath {
-    sale_id: uuid::Uuid,
-}
-
-#[apigate::get("/{sale_id}", path = SaleIdPath)]
-async fn get_sale_by_id() {}
-```
-
-### `Query`
-
-```rust
-#[derive(serde::Deserialize)]
-struct SearchQuery {
-    page: Option<u32>,
-    size: Option<u32>,
-}
-
-#[apigate::get("/search", query = SearchQuery)]
-async fn search() {}
-```
-
-### `Json`
-
-```rust
-#[derive(serde::Deserialize)]
-struct BuyInput {
-    sale_ids: Vec<uuid::Uuid>,
-}
-
-#[apigate::post("/buy", json = BuyInput)]
-async fn buy() {}
-```
-
-### `Form` (`application/x-www-form-urlencoded`)
-
-```rust
-#[derive(serde::Deserialize)]
-struct LegacyFilterForm {
-    page: Option<u32>,
-    size: Option<u32>,
-}
-
-#[apigate::post("/legacy-filter", form = LegacyFilterForm)]
-async fn legacy_filter() {}
-```
-
-### `Multipart` (загрузка файла)
-
-```rust
-#[apigate::post("/upload", multipart)]
-async fn upload_file() {}
-```
-
----
-
-## Хуки `before`
-
-`before` — это пользовательская логика, которая выполняется **до отправки запроса** в сервис.
-
-`before`-хуки работают с частями запроса (заголовки, путь, query-строка, extensions) и обычно используются для:
-
-* аутентификации;
-* валидации;
-* добавления/изменения заголовков;
-* генерации служебных значений (`x-request-id` и т.п.).
-
-### Объявление хука
-
-```rust
-#[apigate::hook]
-async fn verify_api_key(ctx: &mut apigate::PartsCtx<'_>) -> apigate::HookResult {
-    let api_key = ctx
-        .header("x-api-key")
-        .ok_or_else(|| apigate::HookError::forbidden("missing api key"))?;
-
-    if api_key != "secret-key" {
-        return Err(apigate::HookError::forbidden("invalid api key"));
-    }
-
-    Ok(())
-}
-```
-
-### Подключение хука
-
-```rust
-#[apigate::get(
-    "/admin/stats",
-    before = [verify_api_key]
-)]
-async fn admin_stats() {}
-```
-
----
-
-## Изменение заголовков (`before`)
-
-```rust
-#[apigate::hook]
-async fn get_current_user(ctx: &mut apigate::PartsCtx<'_>) -> apigate::HookResult {
-    // ваша логика аутентификации
-    ctx.set_header("x-user-id", "11111111-1111-1111-1111-111111111111");
-    ctx.set_header("x-user-role", "user");
-    ctx.set_header_if_absent("x-request-id", "generated-request-id");
-    Ok(())
-}
-```
-
-Использование:
-
-```rust
-#[apigate::get(
-    "/user",
-    before = [get_current_user]
-)]
-async fn get_user_sales() {}
-```
-
----
-
-## Параметры `hook` и `map`
-
-`#[apigate::hook]` и `#[apigate::map]` поддерживают гибкую инъекцию параметров. Макрос анализирует тип каждого параметра и автоматически генерирует код извлечения:
-
-| Тип параметра | Откуда берётся | Пример |
-|---|---|---|
-| `&mut PartsCtx<'_>` | Контекст запроса (заголовки, URI) | `ctx: &mut PartsCtx<'_>` |
-| `&mut RequestScope` | Прямой доступ к scope | `scope: &mut RequestScope` |
-| `&T` | `scope.get::<T>()` — иммутабельная ссылка | `config: &AuthConfig` |
-| `&mut T` | `scope.get_mut::<T>()` — мутабельная ссылка | `state: &mut RequestState` |
-| `T` (owned, только в hook) | `scope.take::<T>()` — забрать из scope | `path: SaleIdPath` |
-| `T` (первый owned в map) | Передаётся напрямую (input) | `input: PublicBuyInput` |
-
-Все параметры опциональны — указывайте только то, что нужно.
-
-### Примеры
-
-```rust
-// Минимальный хук — без параметров
-#[apigate::hook]
-async fn log_request() -> apigate::HookResult {
-    Ok(())
-}
-
-// Только ctx
-#[apigate::hook]
-async fn verify_api_key(ctx: &mut apigate::PartsCtx<'_>) -> apigate::HookResult {
-    let key = ctx.header("x-api-key")
-        .ok_or_else(|| apigate::ApigateError::forbidden("missing api key"))?;
-    Ok(())
-}
-
-// ctx + state из AppBuilder::state()
-#[apigate::hook]
-async fn auth_hook(ctx: &mut apigate::PartsCtx<'_>, config: &AuthConfig) -> apigate::HookResult {
-    // config извлекается из scope автоматически
-    Ok(())
-}
-
-// Прямой доступ к scope (для scope.insert / scope.take)
-#[apigate::hook]
-async fn enrich(scope: &mut apigate::RequestScope) -> apigate::HookResult {
-    scope.insert(MyCustomData { /* ... */ });
-    Ok(())
-}
-
-// Мутабельная ссылка на данные в scope
-#[apigate::hook]
-async fn update_state(state: &mut RequestState) -> apigate::HookResult {
-    state.counter += 1;
-    Ok(())
-}
-
-// map: первый owned-параметр — это input (передаётся напрямую, не из scope)
-#[apigate::map]
-async fn remap(input: PublicInput, config: &AuthConfig) -> apigate::MapResult<ServiceInput> {
-    // input — распарсенное тело запроса
-    // config — state из scope
-    Ok(ServiceInput { /* ... */ })
-}
-```
-
-### Ограничения
-
-* `&mut PartsCtx<'_>` и `&mut RequestScope` — максимум по одному
-* `&mut T` — максимум один параметр
-* `&mut T` нельзя совмещать с `&T`-параметрами (конфликт мутабельного и иммутабельного borrow)
-* `&mut RequestScope` нельзя совмещать с `&T` и `&mut T`-параметрами
-
----
-
-## Преобразование данных (`map`)
-
-`map` — это типизированное преобразование входных данных перед отправкой в сервис.
-
-Поддерживаются:
-
-* `query = T, map = ...`
-* `json = T, map = ...`
-* `form = T, map = ...`
-
-### Почему `map` отдельно от `before`
-
-* `before` — для заголовков/проверок;
-* `map` — для преобразования типизированного тела/параметров.
-
-Так проще и понятнее: нет смешивания аутентификации и преобразования данных.
-
----
-
-## Изменение `Json` через `map`
-
-### Пример: внешний и внутренний JSON отличаются
-
-```rust
-#[derive(serde::Deserialize)]
-struct PublicBuyInput {
-    sale_ids: Vec<uuid::Uuid>,
-    coupon: Option<String>,
-    use_bonus_points: Option<bool>,
-}
-
-#[derive(serde::Serialize)]
-struct ServiceBuyInput {
-    sale_ids: Vec<uuid::Uuid>,
-    promo_code: Option<String>,
-    payment_mode: String,
-    source: &'static str,
-}
-
-#[apigate::map]
-async fn remap_buy_json(
-    input: PublicBuyInput,
-) -> apigate::MapResult<ServiceBuyInput> {
-    Ok(ServiceBuyInput {
-        sale_ids: input.sale_ids,
-        promo_code: input.coupon,
-        payment_mode: if input.use_bonus_points.unwrap_or(false) {
-            "bonus".to_string()
-        } else {
-            "money".to_string()
-        },
-        source: "apigate",
-    })
-}
-```
-
-Использование:
-
-```rust
-#[apigate::post(
-    "/buy",
-    json = PublicBuyInput,
-    before = [get_current_user],
-    map = remap_buy_json
-)]
-async fn buy() {}
-```
-
----
-
-## Изменение `Query` через `map`
-
-```rust
-#[derive(serde::Deserialize)]
-struct ProductsQueryPublic {
-    page: Option<u32>,
-    size: Option<u32>,
-    q: Option<String>,
-}
-
-#[derive(serde::Serialize)]
-struct ProductsQueryService {
-    offset: u32,
-    limit: u32,
-    query: Option<String>,
-}
-
-#[apigate::map]
-async fn remap_products_query(
-    input: ProductsQueryPublic,
-) -> apigate::MapResult<ProductsQueryService> {
-    let page = input.page.unwrap_or(1).max(1);
-    let size = input.size.unwrap_or(20).clamp(1, 100);
-
-    Ok(ProductsQueryService {
-        offset: (page - 1) * size,
-        limit: size,
-        query: input.q.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()),
-    })
-}
-```
-
-Использование:
-
-```rust
-#[apigate::get(
-    "/products",
-    query = ProductsQueryPublic,
-    map = remap_products_query
-)]
-async fn get_products() {}
-```
-
----
-
-## Изменение `Form` через `map`
-
-```rust
-#[derive(serde::Deserialize)]
-struct LegacyFormPublic {
-    title: String,
-    category: String,
-}
-
-#[derive(serde::Serialize)]
-struct LegacyFormService {
-    title: String,
-    category_code: String,
-}
-
-#[apigate::map]
-async fn remap_legacy_form(
-    input: LegacyFormPublic,
-) -> apigate::MapResult<LegacyFormService> {
-    let code = match input.category.as_str() {
-        "pets" => "P",
-        "items" => "I",
-        _ => "U",
-    };
-
-    Ok(LegacyFormService {
-        title: input.title.trim().to_string(),
-        category_code: code.to_string(),
-    })
-}
-```
-
-Использование:
-
-```rust
-#[apigate::post(
-    "/legacy-create",
-    form = LegacyFormPublic,
-    before = [verify_api_key],
-    map = remap_legacy_form
-)]
-async fn legacy_create() {}
-```
-
----
-
-## Multipart (файлы)
-
-Для загрузки файлов используйте `multipart`-маршрут. По умолчанию библиотека проксирует данные в сервис без преобразования тела.
-
-```rust
-#[apigate::post(
-    "/upload",
-    multipart,
-    before = [get_current_user]
-)]
-async fn upload_file() {}
-```
-
----
-
-## Политики (таймауты, балансировка, маршрутизация)
-
-Политики задаются **только в `main`** и привязываются по имени.
-
-```rust
-let app = apigate::App::builder()
-    .request_timeout(std::time::Duration::from_millis(1500))
-    .policy(
-        "sales_default",
-        apigate::Policy::new()
-            .router(apigate::routing::HeaderSticky::new("x-user-id"))
-            .balancer(apigate::balancing::ConsistentHash::new()),
-    )
-    .build()?;
-```
-
-### Таймауты
-
-| Метод | Дефолт | Описание |
-|---|---|---|
-| `.request_timeout(Duration)` | 30s | Максимальное время на upstream-запрос (возвращает 504 при превышении) |
-| `.connect_timeout(Duration)` | 5s | Таймаут на TCP-подключение к backend'у |
-| `.pool_idle_timeout(Duration)` | 90s | Время жизни idle-соединений в пуле |
-
-### Переопределение политики на маршруте
-
-```rust
-#[apigate::get(
-    "/user",
-    before = [get_current_user],
-    policy = "sales_user_sticky"
-)]
-async fn get_user_sales() {}
-```
-
----
-
-## Custom State
-
-Пользовательский state задаётся в `main` через `.state()` и автоматически доступен как `&T`-параметр в хуках и map:
-
-```rust
-#[derive(Clone)]
-struct DbPool(Arc<Pool>);
-
-#[derive(Clone)]
-struct AuthConfig {
-    jwt_secret: String,
-}
-
-let app = apigate::App::builder()
-    .state(DbPool(pool.clone()))
-    .state(AuthConfig { jwt_secret: "...".into() })
-    .backend("sales", ["http://127.0.0.1:8081"])
-    .mount(sales::routes())
-    .build()?;
-```
-
-Доступ в хуках — просто добавьте `&T` параметр:
-
-```rust
-#[apigate::hook]
-async fn auth(ctx: &mut apigate::PartsCtx<'_>, config: &AuthConfig) -> apigate::HookResult {
-    // config доступен автоматически из state
-    Ok(())
-}
-```
-
-> State хранится в `Arc<Extensions>` и **не клонируется** при каждом запросе — хуки получают `&T` через shared-ссылку (zero-copy). Аллокация происходит только при `scope.insert()` / `scope.take()` в per-request хранилище.
-
----
-
-## Производительность
-
-`apigate` спроектирован так, чтобы по умолчанию проксировать запросы с минимальными накладными расходами:
-
-* если не указан `json / query / form`, тело запроса проксируется без чтения;
-* если указан `json = T` без `map`, тело валидируется (parse + проверка) и проксируется как есть;
-* `before`-хуки работают только с частями запроса (до чтения body);
-* `multipart` по умолчанию проксируется как passthrough;
-* все хуки, валидация и map выполняются в одном pipeline (один `Box::pin`, без повторной разборки запроса);
-* app state (`Arc<Extensions>`) не клонируется на каждый запрос — хуки читают shared-ссылку (0 alloc);
-* `path = T` валидирует и десериализует path-параметры до выполнения хуков;
-* HTTP-клиент: `TCP_NODELAY`, connection pooling с keep-alive, настраиваемые таймауты;
-* при превышении `request_timeout` возвращается `504 Gateway Timeout`.
-
----
-
-## Правила
-
-1. `service.name` должен совпадать с ключом backend-пула в `main`:
-
-   * `name = "sales"` ↔ `.backend("sales", ...)`
-
-2. Если `to` не указан, используется `path`.
-
-3. `json = T` / `query = T` / `form = T` можно использовать без `map` — для валидации входящего запроса.
-   Для `map` маршрут должен объявлять соответствующий тип:
-
-   * `json = T` + `map = ...`
-   * `query = T` + `map = ...`
-   * `form = T` + `map = ...`
-
-4. `Path` использует синтаксис `/{id}`.
-
-5. `Multipart` используется для `multipart/form-data`, `Form<T>` — для `application/x-www-form-urlencoded`.
-
-6. `Multipart`, `Json`, `Form` — body-режимы маршрута; в одном маршруте используется только один body-режим.
-
----
-
-## Минимальный пример
-
 ```rust
 #[apigate::service(name = "sales", prefix = "/sales", policy = "sales_default")]
 mod sales {
@@ -614,16 +47,275 @@ mod sales {
     #[apigate::get("/ping")]
     async fn ping() {}
 
-    #[apigate::get("/admin/stats", before = [verify_api_key])]
-    async fn admin_stats() {}
+    #[apigate::get("/{id}", path = SaleIdPath, before = [auth])]
+    async fn get_by_id() {}
 
-    #[apigate::get("/user", before = [get_current_user], policy = "sales_user_sticky")]
-    async fn get_user_sales() {}
+    #[apigate::get("/public", to = "/internal")]
+    async fn public_alias() {}
 
-    #[apigate::post("/buy", json = PublicBuyInput, before = [get_current_user], map = remap_buy_json)]
+    #[apigate::post("/buy", json = BuyInput, before = [auth], map = remap_buy)]
     async fn buy() {}
 
-    #[apigate::post("/upload", multipart, before = [get_current_user])]
-    async fn upload_file() {}
+    #[apigate::post("/upload", multipart, before = [auth])]
+    async fn upload() {}
 }
 ```
+
+| Параметр `service` | Описание |
+|---|---|
+| `name` | Имя сервиса = ключ `.backend(...)` в main |
+| `prefix` | Внешний URL-префикс |
+| `policy` | Политика по умолчанию для всех маршрутов сервиса |
+
+---
+
+## Атрибуты маршрута
+
+```rust
+#[apigate::get("/path", to = "/rewrite", path = T, query = T, json = T, form = T,
+               multipart, before = [hook1, hook2], map = map_fn, policy = "name")]
+```
+
+| Атрибут | Описание |
+|---|---|
+| `"/path"` | Внешний путь. Поддерживает `/{param}` |
+| `to` | Путь в upstream. Без `to` — проксирует как есть (`StripPrefix`). Поддерживает `/{param}` |
+| `path = T` | Десериализует и валидирует path-параметры (`T: Deserialize + Clone`). 400 при ошибке |
+| `query = T` | Валидирует query string |
+| `json = T` | Валидирует JSON body |
+| `form = T` | Валидирует `application/x-www-form-urlencoded` body |
+| `multipart` | Passthrough для `multipart/form-data` |
+| `before = [...]` | Хуки, выполняемые до проксирования |
+| `map = fn` | Преобразование `query/json/form` перед отправкой в upstream |
+| `policy = "name"` | Переопределяет политику сервиса для этого маршрута |
+
+> `json`, `form`, `multipart` — взаимоисключающие (один body-режим на маршрут).
+
+---
+
+## Входные данные
+
+### Path
+
+```rust
+#[derive(Clone, serde::Deserialize)]
+struct SaleIdPath { sale_id: uuid::Uuid }
+
+#[apigate::get("/{sale_id}", path = SaleIdPath)]
+async fn get_sale() {}
+```
+
+Извлекается **до** хуков, попадает в `RequestScope`. Доступен в хуках как `path: SaleIdPath` (owned) или `path: &SaleIdPath`.
+
+### Query / Json / Form
+
+```rust
+#[apigate::get("/search", query = SearchQuery)]           // валидация query
+#[apigate::post("/buy", json = BuyInput)]                  // валидация JSON
+#[apigate::post("/legacy", form = LegacyForm)]             // валидация form
+```
+
+Без `map` — валидация + passthrough оригинального тела. С `map` — преобразование перед отправкой.
+
+### Multipart
+
+```rust
+#[apigate::post("/upload", multipart)]
+async fn upload() {}
+```
+
+Passthrough без чтения тела. `map` не поддерживается.
+
+---
+
+## Хуки (`before`)
+
+Выполняются до проксирования. Работают с заголовками, URI, extensions.
+
+```rust
+#[apigate::hook]
+async fn auth(ctx: &mut apigate::PartsCtx<'_>) -> apigate::HookResult {
+    let token = ctx.header("authorization")
+        .ok_or_else(|| apigate::ApigateError::unauthorized("missing token"))?;
+    ctx.set_header("x-user-id", "...")?;
+    Ok(())
+}
+
+#[apigate::get("/protected", before = [auth])]
+async fn protected() {}
+```
+
+---
+
+## Преобразование (`map`)
+
+Типизированное преобразование `query/json/form` перед отправкой в upstream.
+
+```rust
+#[apigate::map]
+async fn remap_buy(input: PublicBuy) -> apigate::MapResult<ServiceBuy> {
+    Ok(ServiceBuy {
+        ids: input.sale_ids,
+        source: "apigate",
+    })
+}
+
+#[apigate::post("/buy", json = PublicBuy, before = [auth], map = remap_buy)]
+async fn buy() {}
+```
+
+Работает аналогично для `query = T, map = ...` и `form = T, map = ...`:
+- **query**: map переписывает query string в URI
+- **json**: map сериализует результат в новое тело
+- **form**: map сериализует результат в URL-encoded тело
+
+---
+
+## Инъекция параметров в `hook` / `map`
+
+Макрос анализирует типы параметров и генерирует код извлечения:
+
+| Тип | Источник | Пример |
+|---|---|---|
+| `&mut PartsCtx<'_>` | Контекст запроса | `ctx: &mut PartsCtx<'_>` |
+| `&mut RequestScope` | Прямой доступ к scope | `scope: &mut RequestScope` |
+| `&T` | `scope.get::<T>()` — shared state / per-request данные | `config: &AuthConfig` |
+| `&mut T` | `scope.get_mut::<T>()` — только из local | `state: &mut Counter` |
+| `T` (owned в hook) | `scope.take::<T>()` — local, fallback clone из shared | `path: SaleIdPath` |
+| `T` (первый owned в map) | Входные данные (json/query/form) | `input: PublicBuy` |
+
+Все параметры опциональны.
+
+**Ограничения:** `&mut PartsCtx` / `&mut RequestScope` — макс. по одному; `&mut T` — макс. один и нельзя совмещать с `&T`; `&mut RequestScope` нельзя совмещать с `&T` / `&mut T`.
+
+---
+
+## Таймауты
+
+| Метод | Дефолт | Описание |
+|---|---|---|
+| `.request_timeout(Duration)` | 30s | Полное время upstream-запроса. 504 при превышении |
+| `.connect_timeout(Duration)` | 5s | TCP handshake к backend'у |
+| `.pool_idle_timeout(Duration)` | 90s | Время жизни idle-соединений в connection pool |
+
+---
+
+## Политики
+
+Политика = routing (какие backend'ы) + balancing (какой конкретно). Дефолт: `NoRouteKey` + `RoundRobin`.
+
+```rust
+.policy("sticky_sales", apigate::Policy::new()
+    .router(apigate::routing::HeaderSticky::new("x-user-id"))
+    .balancer(apigate::balancing::ConsistentHash::new()))
+```
+
+Приоритет: атрибут маршрута > политика сервиса > дефолтная.
+
+---
+
+## Маршрутизация (routing)
+
+Определяет набор кандидатов и опциональный affinity key для sticky sessions.
+
+| Стратегия | Описание |
+|---|---|
+| `NoRouteKey` | Все backend'ы, без аффинности. **Дефолт** |
+| `HeaderSticky::new("header")` | Affinity key из заголовка |
+
+### Кастомная стратегия
+
+```rust
+use apigate::routing::{RouteStrategy, RouteCtx, RoutingDecision, AffinityKey, CandidateSet};
+
+struct CookieSticky(&'static str);
+
+impl RouteStrategy for CookieSticky {
+    fn route<'a>(&self, ctx: &'_ RouteCtx, _pool: &'a BackendPool) -> RoutingDecision<'a> {
+        let affinity = ctx.headers.get("cookie")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|c| c.split(';').map(str::trim)
+                .find(|s| s.starts_with(self.0))
+                .and_then(|s| s.split('=').nth(1)))
+            .map(AffinityKey::borrowed);
+
+        RoutingDecision { affinity, candidates: CandidateSet::All }
+    }
+}
+```
+
+**`RouteCtx`**: `service`, `route_path`, `method`, `uri`, `headers`.
+
+**`RoutingDecision`**: `affinity: Option<AffinityKey>`, `candidates: CandidateSet` (`All` | `Indices(&[usize])`).
+
+---
+
+## Балансировка (balancing)
+
+Выбирает конкретный backend из кандидатов.
+
+| Стратегия | Описание |
+|---|---|
+| `RoundRobin::new()` | Циклический перебор. **Дефолт** |
+| `ConsistentHash::new()` | Jump consistent hash по affinity key (xxh3). Без ключа — round-robin |
+| `LeastRequest::new()` | Наименьшее число in-flight запросов |
+| `LeastTime::new()` | Наименьшая EWMA-латентность |
+
+Все балансировщики lock-free (атомарные операции).
+
+### Кастомный балансировщик
+
+```rust
+use apigate::balancing::{Balancer, BalanceCtx, StartEvent, ResultEvent};
+
+struct MyBalancer;
+
+impl Balancer for MyBalancer {
+    fn pick<'a>(&self, ctx: &'a BalanceCtx<'a>) -> Option<usize> {
+        // ctx.candidate_len(), ctx.candidate_index(nth), ctx.affinity
+        Some(ctx.candidate_index(0)?)
+    }
+
+    fn on_start(&self, _event: &StartEvent<'_>) {}        // опционально
+    fn on_result(&self, _event: &ResultEvent<'_>) {}       // опционально
+}
+```
+
+**`BalanceCtx`**: `service`, `affinity`, `pool`, `candidates`, `candidate_len()`, `candidate_index(nth)`, `candidate_backend(nth)`, `is_candidate(idx)`.
+
+**`ResultEvent`**: `service`, `backend_index`, `status: Option<StatusCode>`, `error: Option<ProxyErrorKind>`, `head_latency: Duration`.
+
+---
+
+## Custom State
+
+```rust
+let app = apigate::App::builder()
+    .state(DbPool(pool.clone()))
+    .state(AuthConfig { jwt_secret: "...".into() })
+    // ...
+```
+
+Доступ в хуках через `&T`:
+
+```rust
+#[apigate::hook]
+async fn auth(ctx: &mut apigate::PartsCtx<'_>, config: &AuthConfig) -> apigate::HookResult {
+    // config из shared state, zero-copy
+    Ok(())
+}
+```
+
+State хранится в `Arc<Extensions>` — **не клонируется** на каждый запрос. `scope.get::<T>()` читает shared-ссылку. `scope.insert()` / `scope.take()` работают с per-request хранилищем.
+
+---
+
+## Производительность
+
+* Без `json/query/form` — body проксируется без чтения (streaming)
+* `json = T` без `map` — валидация + passthrough оригинального тела
+* State: `Arc<Extensions>`, 0 heap-аллокаций для read-only доступа
+* Pipeline: path + hooks + body в одном `Box::pin`
+* HTTP-клиент: `TCP_NODELAY`, connection pooling, keep-alive
+* `request_timeout` → `504 Gateway Timeout`
+* Балансировщики lock-free (atomic counters)
