@@ -38,8 +38,12 @@ async fn main() -> anyhow::Result<()> {
         .state(cfg.db_pool.clone())
         .state(cfg.auth_config.clone())
 
-        // Общий timeout по умолчанию
-        .default_timeout(std::time::Duration::from_millis(cfg.default_timeout_ms))
+        // Таймаут на весь upstream-запрос (504 при превышении)
+        .request_timeout(std::time::Duration::from_millis(cfg.request_timeout_ms))
+        // Таймаут на TCP-подключение к backend'у
+        .connect_timeout(std::time::Duration::from_secs(5))
+        // Время жизни idle-соединений в пуле
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
 
         // Политики
         .policy(
@@ -250,7 +254,8 @@ async fn get_user_sales() {}
 |---|---|---|
 | `&mut PartsCtx<'_>` | Контекст запроса (заголовки, URI) | `ctx: &mut PartsCtx<'_>` |
 | `&mut RequestScope` | Прямой доступ к scope | `scope: &mut RequestScope` |
-| `&T` | `scope.get::<T>()` — ссылка на state | `db: &DbPool` |
+| `&T` | `scope.get::<T>()` — иммутабельная ссылка | `config: &AuthConfig` |
+| `&mut T` | `scope.get_mut::<T>()` — мутабельная ссылка | `state: &mut RequestState` |
 | `T` (owned, только в hook) | `scope.take::<T>()` — забрать из scope | `path: SaleIdPath` |
 | `T` (первый owned в map) | Передаётся напрямую (input) | `input: PublicBuyInput` |
 
@@ -287,6 +292,13 @@ async fn enrich(scope: &mut apigate::RequestScope) -> apigate::HookResult {
     Ok(())
 }
 
+// Мутабельная ссылка на данные в scope
+#[apigate::hook]
+async fn update_state(state: &mut RequestState) -> apigate::HookResult {
+    state.counter += 1;
+    Ok(())
+}
+
 // map: первый owned-параметр — это input (передаётся напрямую, не из scope)
 #[apigate::map]
 async fn remap(input: PublicInput, config: &AuthConfig) -> apigate::MapResult<ServiceInput> {
@@ -299,8 +311,9 @@ async fn remap(input: PublicInput, config: &AuthConfig) -> apigate::MapResult<Se
 ### Ограничения
 
 * `&mut PartsCtx<'_>` и `&mut RequestScope` — максимум по одному
-* `&mut T` для произвольного `T` не поддерживается (только `&T`)
-* `&mut RequestScope` нельзя совмещать с `&T`-параметрами (конфликт мутабельного и иммутабельного borrow)
+* `&mut T` — максимум один параметр
+* `&mut T` нельзя совмещать с `&T`-параметрами (конфликт мутабельного и иммутабельного borrow)
+* `&mut RequestScope` нельзя совмещать с `&T` и `&mut T`-параметрами
 
 ---
 
@@ -486,7 +499,7 @@ async fn upload_file() {}
 
 ```rust
 let app = apigate::App::builder()
-    .default_timeout(std::time::Duration::from_millis(1500))
+    .request_timeout(std::time::Duration::from_millis(1500))
     .policy(
         "sales_default",
         apigate::Policy::new()
@@ -495,6 +508,14 @@ let app = apigate::App::builder()
     )
     .build()?;
 ```
+
+### Таймауты
+
+| Метод | Дефолт | Описание |
+|---|---|---|
+| `.request_timeout(Duration)` | 30s | Максимальное время на upstream-запрос (возвращает 504 при превышении) |
+| `.connect_timeout(Duration)` | 5s | Таймаут на TCP-подключение к backend'у |
+| `.pool_idle_timeout(Duration)` | 90s | Время жизни idle-соединений в пуле |
 
 ### Переопределение политики на маршруте
 
