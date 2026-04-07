@@ -32,6 +32,11 @@ struct ServiceBuyInput {
     source: &'static str,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct SaleIdPath {
+    id: Uuid,
+}
+
 #[derive(Debug, Deserialize)]
 struct LegacyFormPublic {
     title: String,
@@ -155,8 +160,8 @@ mod sales {
     )]
     async fn secure_user_profile() {}
 
-    // Path parameter
-    #[apigate::get("/{id}", before = [mark_demo_request])]
+    // Path parameter с валидацией
+    #[apigate::get("/{id}", path = SaleIdPath, before = [mark_demo_request])]
     async fn get_by_id() {}
 
     // Rewrite template: /sales/item/{id}/review → /api/v2/reviews/{id}
