@@ -21,7 +21,6 @@ use crate::routing::{NoRouteKey, RouteCtx};
 use crate::{Method, PartsCtx, RequestScope, Routes};
 
 struct Inner {
-    backends: HashMap<String, BackendPool>,
     client: Client<hyper_util::client::legacy::connect::HttpConnector, Body>,
     state: http::Extensions,
     map_body_limit: usize,
@@ -102,17 +101,19 @@ impl AppBuilder {
         let client = Client::builder(TokioExecutor::new()).build_http();
 
         // backend pools
-        let mut pools = HashMap::with_capacity(self.backends.len());
-        for (svc, urls) in self.backends {
-            let bases = urls
-                .iter()
-                .map(|u| BaseUri::parse(u))
-                .collect::<Result<Vec<_>, _>>()?;
-            pools.insert(svc, BackendPool::new(bases));
-        }
+        let pools: HashMap<_, _> = self
+            .backends
+            .into_iter()
+            .map(|(svc, urls)| {
+                let bases = urls
+                    .iter()
+                    .map(|u| BaseUri::parse(u))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok((svc, Arc::new(BackendPool::new(bases))))
+            })
+            .collect::<Result<_, String>>()?;
 
         let inner = Arc::new(Inner {
-            backends: pools,
             client,
             state: self.state,
             _default_timeout: self.default_timeout,
@@ -123,18 +124,22 @@ impl AppBuilder {
         let mut router = Router::new();
 
         for svc_routes in self.mounted {
-            if !inner.backends.contains_key(svc_routes.service) {
-                return Err(format!(
-                    "backend for service `{}` is not registered",
-                    svc_routes.service
-                ));
-            }
+            let pool = pools
+                .get(svc_routes.service)
+                .ok_or_else(|| {
+                    format!(
+                        "backend for service `{}` is not registered",
+                        svc_routes.service,
+                    )
+                })?
+                .clone();
 
             router = mount_service(
                 router,
                 svc_routes,
                 &self.policies,
                 self.default_policy.clone(),
+                pool,
             )?;
         }
 
@@ -161,6 +166,7 @@ fn mount_service(
     routes: Routes,
     policies: &HashMap<String, Arc<Policy>>,
     default_policy: Arc<Policy>,
+    pool: Arc<BackendPool>,
 ) -> Result<Router<Arc<Inner>>, String> {
     // проверим что backend зарегистрирован
     // (в минимальной версии лучше фейлиться сразу)
@@ -187,6 +193,7 @@ fn mount_service(
                 RewriteSpec::Static(to) => Rewrite::Static(FixedRewrite::new(to)),
                 RewriteSpec::Template(tpl) => Rewrite::Template(tpl),
             },
+            pool: Arc::clone(&pool),
             policy,
             pipeline: rd.pipeline,
         };
@@ -251,9 +258,7 @@ async fn proxy_handler(
     Extension(meta): Extension<RouteMeta>,
     mut req: AxumRequest,
 ) -> axum::response::Response {
-    let Some(pool) = inner.backends.get(meta.service) else {
-        return bad_gateway(format!("unknown backend `{}`", meta.service));
-    };
+    let pool = &meta.pool;
 
     // Pipeline: before hooks + body validation/map in a single pass
     if let Some(pipeline) = meta.pipeline {
