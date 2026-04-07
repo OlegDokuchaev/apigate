@@ -561,7 +561,7 @@ async fn auth(ctx: &mut apigate::PartsCtx<'_>, config: &AuthConfig) -> apigate::
 }
 ```
 
-> Для тяжёлых типов используйте `Arc<T>` — state клонируется на каждый запрос, имеющий pipeline.
+> State хранится в `Arc<Extensions>` и **не клонируется** при каждом запросе — хуки получают `&T` через shared-ссылку (zero-copy). Аллокация происходит только при `scope.insert()` / `scope.take()` в per-request хранилище.
 
 ---
 
@@ -573,7 +573,11 @@ async fn auth(ctx: &mut apigate::PartsCtx<'_>, config: &AuthConfig) -> apigate::
 * если указан `json = T` без `map`, тело валидируется (parse + проверка) и проксируется как есть;
 * `before`-хуки работают только с частями запроса (до чтения body);
 * `multipart` по умолчанию проксируется как passthrough;
-* все хуки, валидация и map выполняются в одном pipeline (один `Box::pin`, без повторной разборки запроса).
+* все хуки, валидация и map выполняются в одном pipeline (один `Box::pin`, без повторной разборки запроса);
+* app state (`Arc<Extensions>`) не клонируется на каждый запрос — хуки читают shared-ссылку (0 alloc);
+* `path = T` валидирует и десериализует path-параметры до выполнения хуков;
+* HTTP-клиент: `TCP_NODELAY`, connection pooling с keep-alive, настраиваемые таймауты;
+* при превышении `request_timeout` возвращается `504 Gateway Timeout`.
 
 ---
 
