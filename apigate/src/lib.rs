@@ -12,4 +12,7 @@ pub use apigate_core::{
     PipelineFuture, PipelineResult, RequestScope, RewriteSpec, RewriteTemplate, RouteDef, Routes,
     SrcSeg, run,
 };
+pub use apigate_core::balancing;
+pub use apigate_core::policy::Policy;
+pub use apigate_core::routing;
 pub use apigate_macros::*;
