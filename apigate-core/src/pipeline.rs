@@ -50,6 +50,10 @@ impl RequestScope {
         self.extensions.get::<T>()
     }
 
+    pub fn get_mut<T: Send + Sync + 'static>(&mut self) -> Option<&mut T> {
+        self.extensions.get_mut::<T>()
+    }
+
     pub fn insert<T: Clone + Send + Sync + 'static>(&mut self, val: T) {
         self.extensions.insert(val);
     }
