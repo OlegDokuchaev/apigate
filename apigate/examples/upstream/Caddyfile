@@ -21,9 +21,7 @@
 		templates
 		respond `{
   "kind": "internal",
-  "method": "{{.Req.Method}}",
   "uri": "{{.Req.URL}}",
-  "host": "{{.Req.Host}}",
   "headers": {{.Req.Header | toJson}}
 }` 200
 	}
@@ -36,9 +34,7 @@
 		templates
 		respond `{
   "kind": "admin_stats",
-  "method": "{{.Req.Method}}",
   "uri": "{{.Req.URL}}",
-  "host": "{{.Req.Host}}",
   "headers": {{.Req.Header | toJson}}
 }` 200
 	}
@@ -51,9 +47,7 @@
 		templates
 		respond `{
   "kind": "user",
-  "method": "{{.Req.Method}}",
   "uri": "{{.Req.URL}}",
-  "host": "{{.Req.Host}}",
   "headers": {{.Req.Header | toJson}}
 }` 200
 	}
@@ -66,9 +60,7 @@
 		templates
 		respond `{
   "kind": "secure_user",
-  "method": "{{.Req.Method}}",
   "uri": "{{.Req.URL}}",
-  "host": "{{.Req.Host}}",
   "headers": {{.Req.Header | toJson}}
 }` 200
 	}
@@ -81,7 +73,6 @@
 		templates
 		respond `{
   "kind": "products",
-  "method": "{{.Req.Method}}",
   "uri": "{{.Req.URL}}",
   "query": "{{.Req.URL.RawQuery}}",
   "headers": {{.Req.Header | toJson}}
@@ -95,12 +86,8 @@
 	handle @buy {
 		respond <<EOF
 kind=buy
-method={method}
-uri={uri}
 content_type={header.Content-Type}
 x_user_id={header.X-User-Id}
-x_user_role={header.X-User-Role}
-x_request_id={header.X-Request-Id}
 body={http.request.body}
 EOF 200
 	}
@@ -112,10 +99,7 @@ EOF 200
 	handle @legacy_create {
 		respond <<EOF
 kind=legacy_create
-method={method}
-uri={uri}
 content_type={header.Content-Type}
-x_api_key={header.X-Api-Key}
 body={http.request.body}
 EOF 200
 	}
@@ -129,8 +113,7 @@ EOF 200
 		respond `{
   "kind": "review",
   "id": "{re.reviews.1}",
-  "uri": "{{.Req.URL}}",
-  "headers": {{.Req.Header | toJson}}
+  "uri": "{{.Req.URL}}"
 }` 200
 	}
 
@@ -150,6 +133,20 @@ EOF 200
 		respond "" 204
 	}
 
+	@update_by_id {
+		method POST
+		path_regexp update ^/([^/]+)/update$
+	}
+	handle @update_by_id {
+		respond <<EOF
+kind=update
+id={re.update.1}
+content_type={header.Content-Type}
+x_user_id={header.X-User-Id}
+body={http.request.body}
+EOF 200
+	}
+
 	@byid {
 		method GET
 		path_regexp byid ^/([^/]+)$
@@ -161,6 +158,8 @@ EOF 200
   "kind": "by_id",
   "id": "{re.byid.1}",
   "uri": "{{.Req.URL}}",
+  "x_sale_id": "{{.Req.Header.Get "X-Sale-Id"}}",
+  "x_apigate_demo": "{{.Req.Header.Get "X-Apigate-Demo"}}",
   "headers": {{.Req.Header | toJson}}
 }` 200
 	}
