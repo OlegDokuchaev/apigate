@@ -201,6 +201,9 @@ async fn main() -> anyhow::Result<()> {
     // Минимальный upstream (один адрес) для сервиса "sales"
     let app = apigate::App::builder()
         .backend("sales", ["http://127.0.0.1:8081"])
+        .request_timeout(std::time::Duration::from_secs(10))
+        .connect_timeout(std::time::Duration::from_secs(3))
+        .pool_idle_timeout(std::time::Duration::from_secs(60))
         .mount(sales::routes())
         .build()
         .map_err(anyhow::Error::msg)?;
