@@ -6,6 +6,8 @@
 | `hooks` | Shared state в хуке, auth, инъекция заголовков, цепочка хуков, per-request data через scope |
 | `path` | Валидация path (UUID), доступ к path в хуке (`&T`), доступ к path в map |
 | `map` | Преобразование query, json (+ shared state), form |
+| `policy` | HeaderSticky + ConsistentHash, LeastRequest, LeastTime, RoundRobin |
+| `multipart` | Загрузка файлов: passthrough с auth и без |
 
 ## Запуск
 
@@ -18,6 +20,8 @@ cargo run --example basic
 cargo run --example hooks
 cargo run --example path
 cargo run --example map
+cargo run --example policy
+cargo run --example multipart
 ```
 
 Каждый пример при запуске выводит curl-команды для тестирования.

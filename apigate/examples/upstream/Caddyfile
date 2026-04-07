@@ -127,10 +127,34 @@ EOF 200
 
 	@upload {
 		method POST PUT
-		path /upload
+		path /upload /upload-public
 	}
 	handle @upload {
 		respond "" 204
+	}
+
+	@fast {
+		method GET
+		path /fast
+	}
+	handle @fast {
+		templates
+		respond `{
+  "kind": "fast",
+  "headers": {{.Req.Header | toJson}}
+}` 200
+	}
+
+	@optimized {
+		method GET
+		path /optimized
+	}
+	handle @optimized {
+		templates
+		respond `{
+  "kind": "optimized",
+  "headers": {{.Req.Header | toJson}}
+}` 200
 	}
 
 	@update_by_id {
@@ -150,7 +174,7 @@ EOF 200
 	@byid {
 		method GET
 		path_regexp byid ^/([^/]+)$
-		not path /ping /internal /admin/stats /user /secure-user /products /buy /legacy-create /anything /upload
+		not path /ping /internal /admin/stats /user /secure-user /products /buy /legacy-create /anything /upload /upload-public /fast /optimized
 	}
 	handle @byid {
 		templates
