@@ -29,10 +29,7 @@ name = "apigate-core"
 version = "0.1.0"
 dependencies = [
  "axum",
- "bytes",
  "http",
- "http-body-util",
- "hyper",
  "hyper-util",
  "smallvec",
  "tokio",
