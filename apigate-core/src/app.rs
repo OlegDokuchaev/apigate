@@ -256,31 +256,32 @@ fn method_router(method: Method) -> routing::MethodRouter<Arc<Inner>> {
 async fn proxy_handler(
     State(inner): State<Arc<Inner>>,
     Extension(meta): Extension<RouteMeta>,
-    mut req: AxumRequest,
+    req: AxumRequest,
 ) -> axum::response::Response {
     let pool = &meta.pool;
 
+    let (mut parts, body) = req.into_parts();
+
     // Pipeline: before hooks + body validation/map in a single pass
-    if let Some(pipeline) = meta.pipeline {
-        let (mut parts, body) = req.into_parts();
+    let body = if let Some(pipeline) = meta.pipeline {
         let ctx = PartsCtx::new(meta.service, meta.route_path, &mut parts);
         let scope = RequestScope::with_state(inner.state.clone(), body, inner.map_body_limit);
 
-        let body = match pipeline(ctx, scope).await {
+        match pipeline(ctx, scope).await {
             Ok(body) => body,
             Err(err) => return err.into_response(),
-        };
-
-        req = http::Request::from_parts(parts, body);
-    }
+        }
+    } else {
+        body
+    };
 
     // Routing
     let route_ctx = RouteCtx {
         service: meta.service,
         route_path: meta.route_path,
-        method: req.method(),
-        uri: req.uri(),
-        headers: req.headers(),
+        method: &parts.method,
+        uri: &parts.uri,
+        headers: &parts.headers,
     };
     let routing = meta.policy.router.route(&route_ctx, pool);
 
@@ -306,7 +307,7 @@ async fn proxy_handler(
 
     let started_at = Instant::now();
 
-    match proxy_request(backend, &inner.client, &meta, req).await {
+    match proxy_request(backend, &inner.client, &meta, parts, body).await {
         Ok(response) => {
             let elapsed = started_at.elapsed();
 

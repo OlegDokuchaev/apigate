@@ -5,6 +5,7 @@ use http::header::{
     CONNECTION, HOST, PROXY_AUTHENTICATE, PROXY_AUTHORIZATION, TE, TRAILER, TRANSFER_ENCODING,
     UPGRADE,
 };
+use http::request::Parts;
 use http::uri::{PathAndQuery, Uri};
 use http::{HeaderMap, HeaderName, Request, Response, StatusCode};
 use hyper_util::client::legacy::Client;
@@ -25,13 +26,11 @@ pub async fn proxy_request(
     backend: &Backend,
     client: &Client<HttpConnector, Body>,
     meta: &RouteMeta,
-    req: Request<Body>,
+    mut parts: Parts,
+    body: Body,
 ) -> Result<Response<Body>, ProxyErrorKind> {
-    let (mut parts, body) = req.into_parts();
-
     let incoming_uri = std::mem::take(&mut parts.uri);
     parts.uri = rewrite_uri(&backend.base, meta, incoming_uri)?;
-    println!("Incoming URI: {}", parts.uri);
 
     strip_hop_headers(&mut parts.headers);
     parts.headers.insert(HOST, backend.base.host_header.clone());
