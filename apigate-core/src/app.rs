@@ -10,21 +10,22 @@ use axum::routing;
 use axum::{Extension, Router};
 
 use hyper_util::client::legacy::Client;
-use hyper_util::rt::TokioExecutor;
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::rt::{TokioExecutor, TokioTimer};
 
 use crate::backend::{BackendPool, BaseUri};
 use crate::balancing::{BalanceCtx, ProxyErrorKind, ResultEvent, RoundRobin, StartEvent};
 use crate::policy::Policy;
-use crate::proxy::{bad_gateway, proxy_request};
+use crate::proxy::{bad_gateway, gateway_timeout, proxy_request};
 use crate::route::{FixedRewrite, Rewrite, RewriteSpec, RouteMeta};
 use crate::routing::{NoRouteKey, RouteCtx};
 use crate::{Method, PartsCtx, RequestScope, Routes};
 
 struct Inner {
-    client: Client<hyper_util::client::legacy::connect::HttpConnector, Body>,
+    client: Client<HttpConnector, Body>,
     state: http::Extensions,
     map_body_limit: usize,
-    _default_timeout: Duration,
+    request_timeout: Duration,
 }
 
 pub struct App {
@@ -36,7 +37,9 @@ pub struct AppBuilder {
     mounted: Vec<Routes>,
     policies: HashMap<String, Arc<Policy>>,
     default_policy: Arc<Policy>,
-    default_timeout: Duration,
+    request_timeout: Duration,
+    connect_timeout: Duration,
+    pool_idle_timeout: Duration,
     map_body_limit: usize,
     state: http::Extensions,
 }
@@ -48,7 +51,9 @@ impl AppBuilder {
             mounted: Vec::new(),
             policies: HashMap::new(),
             default_policy: Arc::new(Policy::new().router(NoRouteKey).balancer(RoundRobin::new())),
-            default_timeout: Duration::from_secs(30),
+            request_timeout: Duration::from_secs(30),
+            connect_timeout: Duration::from_secs(5),
+            pool_idle_timeout: Duration::from_secs(90),
             map_body_limit: 2 * 1024 * 1024,
             state: http::Extensions::new(),
         }
@@ -76,8 +81,18 @@ impl AppBuilder {
         self
     }
 
-    pub fn default_timeout(mut self, d: Duration) -> Self {
-        self.default_timeout = d;
+    pub fn request_timeout(mut self, d: Duration) -> Self {
+        self.request_timeout = d;
+        self
+    }
+
+    pub fn connect_timeout(mut self, d: Duration) -> Self {
+        self.connect_timeout = d;
+        self
+    }
+
+    pub fn pool_idle_timeout(mut self, d: Duration) -> Self {
+        self.pool_idle_timeout = d;
         self
     }
 
@@ -97,8 +112,16 @@ impl AppBuilder {
     }
 
     pub fn build(self) -> Result<App, String> {
-        // client (pooling внутри hyper-util)
-        let client = Client::builder(TokioExecutor::new()).build_http();
+        // HTTP client
+        let mut connector = HttpConnector::new();
+        connector.set_nodelay(true);
+        connector.set_connect_timeout(Some(self.connect_timeout));
+        connector.set_keepalive(Some(self.pool_idle_timeout));
+
+        let client = Client::builder(TokioExecutor::new())
+            .pool_timer(TokioTimer::new())
+            .pool_idle_timeout(self.pool_idle_timeout)
+            .build(connector);
 
         // backend pools
         let pools: HashMap<_, _> = self
@@ -116,7 +139,7 @@ impl AppBuilder {
         let inner = Arc::new(Inner {
             client,
             state: self.state,
-            _default_timeout: self.default_timeout,
+            request_timeout: self.request_timeout,
             map_body_limit: self.map_body_limit,
         });
 
@@ -307,7 +330,12 @@ async fn proxy_handler(
 
     let started_at = Instant::now();
 
-    match proxy_request(backend, &inner.client, &meta, parts, body).await {
+    let result = tokio::time::timeout(
+        inner.request_timeout,
+        proxy_request(backend, &inner.client, &meta, parts, body),
+    ).await.unwrap_or_else(|_| Err(ProxyErrorKind::Timeout));
+
+    match result {
         Ok(response) => {
             let elapsed = started_at.elapsed();
 
@@ -336,6 +364,7 @@ async fn proxy_handler(
                 ProxyErrorKind::NoBackends => bad_gateway("no backends"),
                 ProxyErrorKind::InvalidUpstreamUri => bad_gateway("bad upstream uri"),
                 ProxyErrorKind::UpstreamRequest => bad_gateway("upstream request failed"),
+                ProxyErrorKind::Timeout => gateway_timeout("upstream request timed out"),
             }
         }
     }

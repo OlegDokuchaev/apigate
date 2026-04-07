@@ -62,6 +62,7 @@ pub enum ProxyErrorKind {
     InvalidUpstreamUri,
     UpstreamRequest,
     NoBackends,
+    Timeout,
 }
 
 pub struct StartEvent<'a> {

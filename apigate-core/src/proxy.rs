@@ -264,3 +264,11 @@ pub fn bad_gateway(msg: impl Into<Body>) -> Response<Body> {
         .body(msg.into())
         .unwrap()
 }
+
+pub fn gateway_timeout(msg: impl Into<Body>) -> Response<Body> {
+    Response::builder()
+        .status(StatusCode::GATEWAY_TIMEOUT)
+        .header(http::header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body(msg.into())
+        .unwrap()
+}
