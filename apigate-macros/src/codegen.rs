@@ -14,6 +14,7 @@ pub(crate) fn generate_pipeline_wrapper(
     hooks: &[Path],
     data: &DataKind,
     map_fn: Option<&Path>,
+    path_type: Option<&Type>,
     generated_items: &mut Vec<Item>,
 ) -> Result<TokenStream2> {
     let has_hooks = !hooks.is_empty();
@@ -21,13 +22,15 @@ pub(crate) fn generate_pipeline_wrapper(
         data,
         DataKind::Json(_) | DataKind::Query(_) | DataKind::Form(_)
     );
+    let has_path = path_type.is_some();
 
-    if !has_hooks && !has_body && map_fn.is_none() {
+    if !has_hooks && !has_body && map_fn.is_none() && !has_path {
         return Ok(quote!(None));
     }
 
     let pipeline_ident = format_ident!("__apigate_pipeline_{}", f.sig.ident);
 
+    let path_phase = build_path_phase(path_type);
     let hook_phase = if has_hooks {
         let calls = hooks
             .iter()
@@ -36,7 +39,6 @@ pub(crate) fn generate_pipeline_wrapper(
     } else {
         quote!()
     };
-
     let body_phase = build_body_phase(apigate_path, data, map_fn, &f.sig.ident)?;
 
     let item: Item = syn::parse_quote! {
@@ -46,6 +48,7 @@ pub(crate) fn generate_pipeline_wrapper(
             mut scope: #apigate_path::RequestScope,
         ) -> #apigate_path::PipelineFuture<'a> {
             ::std::boxed::Box::pin(async move {
+                #path_phase
                 #hook_phase
                 #body_phase
             })
@@ -54,6 +57,20 @@ pub(crate) fn generate_pipeline_wrapper(
 
     generated_items.push(item);
     Ok(quote!(Some(#pipeline_ident as #apigate_path::PipelineFn)))
+}
+
+// ---------------------------------------------------------------------------
+// Path phase
+// ---------------------------------------------------------------------------
+
+fn build_path_phase(path_type: Option<&Type>) -> TokenStream2 {
+    match path_type {
+        Some(ty) => quote! {
+            let __apigate_path_value: #ty = ctx.extract_path::<#ty>().await?;
+            scope.insert(__apigate_path_value);
+        },
+        None => quote!(),
+    }
 }
 
 // ---------------------------------------------------------------------------

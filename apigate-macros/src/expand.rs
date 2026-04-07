@@ -129,10 +129,9 @@ fn matches_special_type(ty: &Type, expected: &Path, fallback_ident: &str) -> boo
 }
 
 fn path_eq_ignoring_args(a: &Path, b: &Path) -> bool {
-    if a.leading_colon.is_some() != b.leading_colon.is_some() {
-        return false;
-    }
-
+    // Intentionally ignore leading `::` — user may write `apigate::PartsCtx`
+    // while the expected path is `::apigate::PartsCtx`. Segment idents are
+    // compared below, which is sufficient to prevent false positives.
     if a.segments.len() != b.segments.len() {
         return false;
     }

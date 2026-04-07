@@ -113,6 +113,7 @@ pub(crate) struct RouteArgs {
     pub before: Vec<Path>,
     pub map: Option<Path>,
     pub data: DataKind,
+    pub path_type: Option<Type>,
 }
 
 impl RouteArgs {
@@ -151,6 +152,7 @@ struct RouteArgsBuilder {
     before: Option<Vec<Path>>,
     map: Option<Path>,
     data: DataKind,
+    path_type: Option<Type>,
 }
 
 impl RouteArgsBuilder {
@@ -174,6 +176,9 @@ impl RouteArgsBuilder {
                 self.data =
                     std::mem::take(&mut self.data).set(DataKind::Form(v), Span::call_site())?;
             }
+            RouteArg::PathType(v) => {
+                set_once(&mut self.path_type, v, Span::call_site(), "path")?;
+            }
             RouteArg::Flag(RouteFlag::Multipart) => {
                 self.data =
                     std::mem::take(&mut self.data).set(DataKind::Multipart, Span::call_site())?;
@@ -191,6 +196,7 @@ impl RouteArgsBuilder {
             before: self.before.unwrap_or_default(),
             map: self.map,
             data: self.data,
+            path_type: self.path_type,
         };
 
         args.validate()?;
@@ -214,6 +220,7 @@ enum RouteArg {
     Query(Type),
     Json(Type),
     Form(Type),
+    PathType(Type),
     Flag(RouteFlag),
 }
 
@@ -222,6 +229,7 @@ impl Parse for RouteArg {
         let key: Ident = input.parse()?;
 
         if input.peek(Token![=]) {
+            // TODO: Maybe match case?
             if key == "to" {
                 Ok(Self::To(parse_assigned(input)?))
             } else if key == "policy" {
@@ -237,11 +245,13 @@ impl Parse for RouteArg {
                 Ok(Self::Json(parse_assigned(input)?))
             } else if key == "form" {
                 Ok(Self::Form(parse_assigned(input)?))
+            } else if key == "path" {
+                Ok(Self::PathType(parse_assigned(input)?))
             } else {
                 Err(Error::new(
                     key.span(),
                     "unknown route argument, expected one of: \
-                     `to`, `policy`, `before`, `map`, `query`, `json`, `form`",
+                     `to`, `policy`, `before`, `map`, `query`, `json`, `form`, `path`",
                 ))
             }
         } else if key == "multipart" {
@@ -308,6 +318,7 @@ pub(crate) fn expand_route_from_fn(
         &matched.args.before,
         &matched.args.data,
         matched.args.map.as_ref(),
+        matched.args.path_type.as_ref(),
         &mut generated_items,
     )?;
 
