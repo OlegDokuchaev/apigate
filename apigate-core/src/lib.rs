@@ -1,13 +1,13 @@
 mod app;
 mod backend;
-mod balancing;
+pub mod balancing;
 mod error;
 mod parts_ctx;
 mod pipeline;
-mod policy;
+pub mod policy;
 mod proxy;
 mod route;
-mod routing;
+pub mod routing;
 
 pub use app::{App, AppBuilder, run};
 pub use error::ApigateError;

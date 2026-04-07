@@ -5,6 +5,7 @@ use std::borrow::Cow;
 
 use crate::backend::BackendPool;
 
+pub use header_sticky::HeaderSticky;
 pub use no_route_key::NoRouteKey;
 
 pub struct RouteCtx<'a> {

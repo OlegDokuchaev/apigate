@@ -8,6 +8,9 @@ use std::time::Duration;
 use crate::backend::{Backend, BackendPool};
 use crate::routing::{AffinityKey, CandidateSet};
 
+pub use consistent_hash::ConsistentHash;
+pub use least_request::LeastRequest;
+pub use least_time::LeastTime;
 pub use round_robin::RoundRobin;
 
 pub struct BackendRef<'a> {
