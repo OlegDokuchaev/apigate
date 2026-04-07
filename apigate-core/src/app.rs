@@ -184,7 +184,7 @@ fn mount_service(
 
         let policy = resolve_policy(routes.policy, rd.policy, policies, &default_policy)?;
 
-        let meta = RouteMeta {
+        let meta = Arc::new(RouteMeta {
             service: routes.service,
             route_path: rd.path,
             prefix: routes.prefix,
@@ -196,7 +196,7 @@ fn mount_service(
             pool: Arc::clone(&pool),
             policy,
             pipeline: rd.pipeline,
-        };
+        });
 
         let method_router = method_router(rd.method).layer(Extension(meta));
 
@@ -255,7 +255,7 @@ fn method_router(method: Method) -> routing::MethodRouter<Arc<Inner>> {
 
 async fn proxy_handler(
     State(inner): State<Arc<Inner>>,
-    Extension(meta): Extension<RouteMeta>,
+    Extension(meta): Extension<Arc<RouteMeta>>,
     req: AxumRequest,
 ) -> axum::response::Response {
     let pool = &meta.pool;
