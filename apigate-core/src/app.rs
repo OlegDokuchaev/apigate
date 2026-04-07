@@ -333,7 +333,9 @@ async fn proxy_handler(
     let result = tokio::time::timeout(
         inner.request_timeout,
         proxy_request(backend, &inner.client, &meta, parts, body),
-    ).await.unwrap_or_else(|_| Err(ProxyErrorKind::Timeout));
+    )
+    .await
+    .unwrap_or_else(|_| Err(ProxyErrorKind::Timeout));
 
     match result {
         Ok(response) => {

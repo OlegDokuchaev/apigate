@@ -1,3 +1,5 @@
+use axum::extract::FromRequestParts;
+
 use crate::error::ApigateError;
 use http::header::{HeaderName, HeaderValue};
 use http::request::Parts;
@@ -95,5 +97,16 @@ impl<'a> PartsCtx<'a> {
 
     pub fn extensions_mut(&mut self) -> &mut http::Extensions {
         &mut self.parts.extensions
+    }
+
+    pub async fn extract_path<T>(&mut self) -> Result<T, ApigateError>
+    where
+        T: Send,
+        axum::extract::Path<T>: FromRequestParts<()>,
+    {
+        axum::extract::Path::<T>::from_request_parts(self.parts, &())
+            .await
+            .map(|p| p.0)
+            .map_err(|_| ApigateError::bad_request("invalid path parameters"))
     }
 }
