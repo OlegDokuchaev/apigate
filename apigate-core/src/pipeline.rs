@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use axum::body::Body;
 use http::Extensions;
@@ -13,10 +14,12 @@ use crate::error::ApigateError;
 
 /// Owns the request body and extracted data for a single pipeline invocation.
 ///
-/// Pre-populated with cloned app state, then enriched with per-request data
-/// (parsed input, path params, etc.) during the pipeline.
+/// App-level state lives in a shared `Arc<Extensions>` (zero-copy per request).
+/// Per-request data (path params, hook insertions) goes into a local `Extensions`
+/// that starts empty and allocates only on first `insert`.
 pub struct RequestScope {
-    extensions: Extensions,
+    shared: Arc<Extensions>,
+    local: Extensions,
     body: Option<Body>,
     body_limit: usize,
 }
@@ -24,15 +27,17 @@ pub struct RequestScope {
 impl RequestScope {
     pub fn new(body: Body, body_limit: usize) -> Self {
         Self {
-            extensions: Extensions::new(),
+            shared: Arc::new(Extensions::new()),
+            local: Extensions::new(),
             body: Some(body),
             body_limit,
         }
     }
 
-    pub(crate) fn with_state(state: Extensions, body: Body, body_limit: usize) -> Self {
+    pub(crate) fn with_shared(shared: Arc<Extensions>, body: Body, body_limit: usize) -> Self {
         Self {
-            extensions: state,
+            shared,
+            local: Extensions::new(),
             body: Some(body),
             body_limit,
         }
@@ -46,20 +51,27 @@ impl RequestScope {
         self.body_limit
     }
 
+    /// Returns a shared reference to `T`.
+    /// Checks local (per-request) extensions first, then shared (app) state.
     pub fn get<T: Send + Sync + 'static>(&self) -> Option<&T> {
-        self.extensions.get::<T>()
+        self.local.get::<T>().or_else(|| self.shared.get::<T>())
     }
 
+    /// Returns a mutable reference to `T` from local (per-request) extensions only.
     pub fn get_mut<T: Send + Sync + 'static>(&mut self) -> Option<&mut T> {
-        self.extensions.get_mut::<T>()
+        self.local.get_mut::<T>()
     }
 
+    /// Inserts a value into per-request (local) extensions.
     pub fn insert<T: Clone + Send + Sync + 'static>(&mut self, val: T) {
-        self.extensions.insert(val);
+        self.local.insert(val);
     }
 
-    pub fn take<T: Send + Sync + 'static>(&mut self) -> Option<T> {
-        self.extensions.remove::<T>()
+    /// Takes a value from local extensions first; if absent, clones from shared state.
+    pub fn take<T: Clone + Send + Sync + 'static>(&mut self) -> Option<T> {
+        self.local
+            .remove::<T>()
+            .or_else(|| self.shared.get::<T>().cloned())
     }
 }
 

@@ -23,7 +23,7 @@ use crate::{Method, PartsCtx, RequestScope, Routes};
 
 struct Inner {
     client: Client<HttpConnector, Body>,
-    state: http::Extensions,
+    state: Arc<http::Extensions>,
     map_body_limit: usize,
     request_timeout: Duration,
 }
@@ -138,7 +138,7 @@ impl AppBuilder {
 
         let inner = Arc::new(Inner {
             client,
-            state: self.state,
+            state: Arc::new(self.state),
             request_timeout: self.request_timeout,
             map_body_limit: self.map_body_limit,
         });
@@ -288,7 +288,7 @@ async fn proxy_handler(
     // Pipeline: before hooks + body validation/map in a single pass
     let body = if let Some(pipeline) = meta.pipeline {
         let ctx = PartsCtx::new(meta.service, meta.route_path, &mut parts);
-        let scope = RequestScope::with_state(inner.state.clone(), body, inner.map_body_limit);
+        let scope = RequestScope::with_shared(Arc::clone(&inner.state), body, inner.map_body_limit);
 
         match pipeline(ctx, scope).await {
             Ok(body) => body,
