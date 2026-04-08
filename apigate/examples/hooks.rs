@@ -30,7 +30,7 @@ struct RequestMeta {
 /// Проверяет api key через shared state (&AppConfig из .state())
 #[apigate::hook]
 async fn require_api_key(
-    ctx: &mut apigate::PartsCtx<'_>,
+    ctx: &mut apigate::PartsCtx,
     config: &AppConfig,
 ) -> apigate::HookResult {
     let key = ctx
@@ -44,7 +44,7 @@ async fn require_api_key(
 
 /// Проверяет токен авторизации, ставит заголовки для upstream
 #[apigate::hook]
-async fn inject_user_headers(ctx: &mut apigate::PartsCtx<'_>) -> apigate::HookResult {
+async fn inject_user_headers(ctx: &mut apigate::PartsCtx) -> apigate::HookResult {
     let _token = ctx
         .header("authorization")
         .ok_or_else(|| apigate::ApigateError::unauthorized("missing authorization"))?;
@@ -56,7 +56,7 @@ async fn inject_user_headers(ctx: &mut apigate::PartsCtx<'_>) -> apigate::HookRe
 /// Генерирует request-id и сохраняет RequestMeta в scope для следующих хуков
 #[apigate::hook]
 async fn set_request_id(
-    ctx: &mut apigate::PartsCtx<'_>,
+    ctx: &mut apigate::PartsCtx,
     scope: &mut apigate::RequestScope,
 ) -> apigate::HookResult {
     let id = Uuid::new_v4().to_string();

@@ -74,7 +74,7 @@ struct LegacyFormService {
 
 /// Аутентификация (нужна для /buy)
 #[apigate::hook]
-async fn inject_user_headers(ctx: &mut apigate::PartsCtx<'_>) -> apigate::HookResult {
+async fn inject_user_headers(ctx: &mut apigate::PartsCtx) -> apigate::HookResult {
     let _token = ctx
         .header("authorization")
         .ok_or_else(|| apigate::ApigateError::unauthorized("missing authorization"))?;

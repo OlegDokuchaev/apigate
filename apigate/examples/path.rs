@@ -37,7 +37,7 @@ struct UpdateSaleService {
 #[apigate::hook]
 async fn log_sale_access(
     path: &SaleIdPath,
-    ctx: &mut apigate::PartsCtx<'_>,
+    ctx: &mut apigate::PartsCtx,
 ) -> apigate::HookResult {
     println!("[hook] sale id={}", path.id);
     ctx.set_header("x-sale-id", &path.id.to_string())?;

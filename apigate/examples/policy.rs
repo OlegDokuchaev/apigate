@@ -4,7 +4,7 @@
 use std::net::SocketAddr;
 
 #[apigate::hook]
-async fn inject_user_id(ctx: &mut apigate::PartsCtx<'_>) -> apigate::HookResult {
+async fn inject_user_id(ctx: &mut apigate::PartsCtx) -> apigate::HookResult {
     let user_id = ctx.header("x-user-id").unwrap_or("anonymous").to_owned();
     ctx.set_header("x-user-id", &user_id)?;
     Ok(())
