@@ -50,7 +50,7 @@ fn classify_param(ty: &Type, special: &SpecialPaths) -> syn::Result<ParamKind> {
             if matches_special_type(other, &special.ctx, "PartsCtx") {
                 return Err(syn::Error::new(
                     other.span(),
-                    "`PartsCtx` parameter must be `&mut PartsCtx<'_>`",
+                    "`PartsCtx` parameter must be `&mut PartsCtx`",
                 ));
             }
 
@@ -79,7 +79,7 @@ fn classify_ref_param(
         } else {
             Err(syn::Error::new(
                 original_ty.span(),
-                "`PartsCtx` parameter must be `&mut PartsCtx<'_>`",
+                "`PartsCtx` parameter must be `&mut PartsCtx`",
             ))
         };
     }
@@ -120,7 +120,7 @@ fn matches_special_type(ty: &Type, expected: &Path, fallback_ident: &str) -> boo
     };
 
     // Ergonomic allowance:
-    // user may write just `PartsCtx<'_>` / `RequestScope` if those names are in scope.
+    // user may write just `PartsCtx` / `RequestScope` if those names are in scope.
     if path.is_ident(fallback_ident) {
         return true;
     }
@@ -180,7 +180,7 @@ fn validate_plans(plans: &[ParamPlan], sig: &syn::Signature, macro_name: &str) -
         return Err(syn::Error::new_spanned(
             sig,
             format!(
-                "only one `&mut PartsCtx<'_>` parameter is allowed in #[apigate::{macro_name}]"
+                "only one `&mut PartsCtx` parameter is allowed in #[apigate::{macro_name}]"
             ),
         ));
     }
