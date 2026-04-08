@@ -222,6 +222,7 @@ async fn buy() {}
 |---|---|
 | `NoRouteKey` | Все backend'ы, без аффинности. **Дефолт** |
 | `HeaderSticky::new("header")` | Affinity key из заголовка |
+| `PathSticky::new("param")` | Affinity key из path-параметра `{param}` шаблона маршрута |
 
 ### Кастомная стратегия
 
@@ -231,7 +232,7 @@ use apigate::routing::{RouteStrategy, RouteCtx, RoutingDecision, AffinityKey, Ca
 struct CookieSticky(&'static str);
 
 impl RouteStrategy for CookieSticky {
-    fn route<'a>(&self, ctx: &'_ RouteCtx, _pool: &'a BackendPool) -> RoutingDecision<'a> {
+    fn route<'a>(&self, ctx: &'a RouteCtx<'a>, _pool: &'a BackendPool) -> RoutingDecision<'a> {
         let affinity = ctx.headers.get("cookie")
             .and_then(|v| v.to_str().ok())
             .and_then(|c| c.split(';').map(str::trim)
@@ -244,7 +245,7 @@ impl RouteStrategy for CookieSticky {
 }
 ```
 
-**`RouteCtx`**: `service`, `route_path`, `method`, `uri`, `headers`.
+**`RouteCtx`**: `service`, `prefix`, `route_path`, `method`, `uri`, `headers`.
 
 **`RoutingDecision`**: `affinity: Option<AffinityKey>`, `candidates: CandidateSet` (`All` | `Indices(&[usize])`).
 
