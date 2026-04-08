@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
 ## Сервис
 
 ```rust
-#[apigate::service(name = "sales", prefix = "/sales", policy = "sales_default")]
+#[apigate::service(prefix = "/sales", policy = "sales_default")]
 mod sales {
     use super::*;
 
@@ -63,8 +63,8 @@ mod sales {
 
 | Параметр `service` | Описание |
 |---|---|
-| `name` | Имя сервиса = ключ `.backend(...)` в main |
-| `prefix` | Внешний URL-префикс |
+| `name` | Имя сервиса = ключ `.backend(...)`. По умолчанию — имя модуля |
+| `prefix` | Внешний URL-префикс. По умолчанию — `""` (корень) |
 | `policy` | Политика по умолчанию для всех маршрутов сервиса |
 
 ---
