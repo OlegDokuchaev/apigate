@@ -1,5 +1,6 @@
 mod header_sticky;
 mod no_route_key;
+mod path_sticky;
 
 use std::borrow::Cow;
 
@@ -7,9 +8,11 @@ use crate::backend::BackendPool;
 
 pub use header_sticky::HeaderSticky;
 pub use no_route_key::NoRouteKey;
+pub use path_sticky::PathSticky;
 
 pub struct RouteCtx<'a> {
     pub service: &'a str,
+    pub prefix: &'a str,
     pub route_path: &'a str,
     pub method: &'a http::Method,
     pub uri: &'a http::Uri,
@@ -50,5 +53,5 @@ pub struct RoutingDecision<'a> {
 }
 
 pub trait RouteStrategy: Send + Sync + 'static {
-    fn route<'a>(&self, ctx: &'_ RouteCtx, pool: &'a BackendPool) -> RoutingDecision<'a>;
+    fn route<'a>(&self, ctx: &'_ RouteCtx<'a>, pool: &'a BackendPool) -> RoutingDecision<'a>;
 }

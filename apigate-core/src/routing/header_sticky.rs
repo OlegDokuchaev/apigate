@@ -14,12 +14,12 @@ impl HeaderSticky {
 }
 
 impl RouteStrategy for HeaderSticky {
-    fn route<'a>(&self, ctx: &'_ RouteCtx, _pool: &'a BackendPool) -> RoutingDecision<'a> {
+    fn route<'a>(&self, ctx: &'_ RouteCtx<'a>, _pool: &'a BackendPool) -> RoutingDecision<'a> {
         let affinity = ctx
             .headers
             .get(self.header)
             .and_then(|v| v.to_str().ok())
-            .map(AffinityKey::owned);
+            .map(AffinityKey::borrowed);
 
         RoutingDecision {
             affinity,

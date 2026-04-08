@@ -282,7 +282,6 @@ async fn proxy_handler(
     req: AxumRequest,
 ) -> axum::response::Response {
     let pool = &meta.pool;
-
     let (mut parts, body) = req.into_parts();
 
     // Pipeline: before hooks + body validation/map in a single pass
@@ -301,6 +300,7 @@ async fn proxy_handler(
     // Routing
     let route_ctx = RouteCtx {
         service: meta.service,
+        prefix: meta.prefix,
         route_path: meta.route_path,
         method: &parts.method,
         uri: &parts.uri,
