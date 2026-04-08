@@ -33,6 +33,7 @@ fn expand_service(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     let prefix = prefix.unwrap_or_else(|| LitStr::new("", Span::call_site()));
 
     let mut module = syn::parse::<ItemMod>(input)?;
+    let name = name.unwrap_or_else(|| LitStr::new(&module.ident.to_string(), module.ident.span()));
     let apigate_path = apigate_crate_path()?;
 
     let Some((_, items)) = module.content.as_mut() else {

@@ -1,12 +1,11 @@
-use proc_macro2::Span;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{Error, Ident, LitStr, Result, Token};
 
-use crate::parse::{parse_assigned, required, set_once};
+use crate::parse::{parse_assigned, set_once};
 
 pub(crate) struct ServiceArgs {
-    pub name: LitStr,
+    pub name: Option<LitStr>,
     pub prefix: Option<LitStr>,
     pub policy: Option<LitStr>,
 }
@@ -18,7 +17,7 @@ enum ServiceArg {
 }
 
 impl Parse for ServiceArg {
-    fn parse(input: ParseStream<'_>) -> Result<Self> {
+    fn parse(input: ParseStream) -> Result<Self> {
         let key: Ident = input.parse()?;
         let value: LitStr = parse_assigned(input)?;
 
@@ -35,7 +34,7 @@ impl Parse for ServiceArg {
 }
 
 impl Parse for ServiceArgs {
-    fn parse(input: ParseStream<'_>) -> Result<Self> {
+    fn parse(input: ParseStream) -> Result<Self> {
         let args = input.call(Punctuated::<ServiceArg, Token![,]>::parse_terminated)?;
 
         let mut name = None;
@@ -51,7 +50,7 @@ impl Parse for ServiceArgs {
         }
 
         Ok(Self {
-            name: required(name, Span::call_site(), "missing `name = \"...\"`")?,
+            name,
             prefix,
             policy,
         })

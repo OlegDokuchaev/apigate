@@ -13,11 +13,6 @@ pub(crate) fn set_once<T>(slot: &mut Option<T>, value: T, span: Span, name: &str
     }
 }
 
-/// Unwraps an `Option<T>`, returning a compile error at `span` if `None`.
-pub(crate) fn required<T>(slot: Option<T>, span: Span, message: &'static str) -> Result<T> {
-    slot.ok_or_else(|| Error::new(span, message))
-}
-
 /// Parses `= <value>` from the input stream (consumes the `=` token first).
 pub(crate) fn parse_assigned<T: Parse>(input: ParseStream<'_>) -> Result<T> {
     input.parse::<Token![=]>()?;
