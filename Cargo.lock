@@ -10,7 +10,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "apigate"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "apigate-core",
@@ -26,7 +26,7 @@ dependencies = [
 
 [[package]]
 name = "apigate-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "axum",
  "http",
@@ -38,7 +38,7 @@ dependencies = [
 
 [[package]]
 name = "apigate-macros"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
