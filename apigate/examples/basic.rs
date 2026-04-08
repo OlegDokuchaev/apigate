@@ -3,7 +3,7 @@
 
 use std::net::SocketAddr;
 
-#[apigate::service(name = "sales", prefix = "/sales")]
+#[apigate::service(prefix = "/sales")]
 mod sales {
     /// Passthrough: проксирует /ping как есть
     #[apigate::get("/ping")]
