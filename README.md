@@ -232,7 +232,7 @@ use apigate::routing::{RouteStrategy, RouteCtx, RoutingDecision, AffinityKey, Ca
 struct CookieSticky(&'static str);
 
 impl RouteStrategy for CookieSticky {
-    fn route<'a>(&self, ctx: &'a RouteCtx<'a>, _pool: &'a BackendPool) -> RoutingDecision<'a> {
+    fn route<'a>(&self, ctx: &RouteCtx<'a>, _pool: &'a BackendPool) -> RoutingDecision<'a> {
         let affinity = ctx.headers.get("cookie")
             .and_then(|v| v.to_str().ok())
             .and_then(|c| c.split(';').map(str::trim)
@@ -272,13 +272,13 @@ use apigate::balancing::{Balancer, BalanceCtx, StartEvent, ResultEvent};
 struct MyBalancer;
 
 impl Balancer for MyBalancer {
-    fn pick<'a>(&self, ctx: &'a BalanceCtx<'a>) -> Option<usize> {
+    fn pick(&self, ctx: &BalanceCtx) -> Option<usize> {
         // ctx.candidate_len(), ctx.candidate_index(nth), ctx.affinity
         Some(ctx.candidate_index(0)?)
     }
 
-    fn on_start(&self, _event: &StartEvent<'_>) {}        // опционально
-    fn on_result(&self, _event: &ResultEvent<'_>) {}       // опционально
+    fn on_start(&self, _event: &StartEvent) {}        // опционально
+    fn on_result(&self, _event: &ResultEvent) {}       // опционально
 }
 ```
 
