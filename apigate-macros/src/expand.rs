@@ -47,14 +47,14 @@ fn classify_param(ty: &Type, special: &SpecialPaths) -> syn::Result<ParamKind> {
     match ty {
         Type::Reference(r) => classify_ref_param(ty, r, special),
         other => {
-            if matches_special_type(other, &special.ctx, "PartsCtx") {
+            if is_special_type(other, &special.ctx) {
                 return Err(syn::Error::new(
                     other.span(),
                     "`PartsCtx` parameter must be `&mut PartsCtx`",
                 ));
             }
 
-            if matches_special_type(other, &special.scope, "RequestScope") {
+            if is_special_type(other, &special.scope) {
                 return Err(syn::Error::new(
                     other.span(),
                     "`RequestScope` parameter must be `&mut RequestScope`",
@@ -73,7 +73,7 @@ fn classify_ref_param(
 ) -> syn::Result<ParamKind> {
     let inner = peel_type(&r.elem);
 
-    if matches_special_type(inner, &special.ctx, "PartsCtx") {
+    if is_special_type(inner, &special.ctx) {
         return if r.mutability.is_some() {
             Ok(ParamKind::Ctx)
         } else {
@@ -84,7 +84,7 @@ fn classify_ref_param(
         };
     }
 
-    if matches_special_type(inner, &special.scope, "RequestScope") {
+    if is_special_type(inner, &special.scope) {
         return if r.mutability.is_some() {
             Ok(ParamKind::Scope)
         } else {
@@ -112,43 +112,34 @@ fn peel_type(mut ty: &Type) -> &Type {
     }
 }
 
-fn matches_special_type(ty: &Type, expected: &Path, fallback_ident: &str) -> bool {
+/// Checks whether `ty` refers to the type at `expected` path.
+/// Derives the bare ident from `expected` itself — no separate string needed.
+fn is_special_type(ty: &Type, expected: &Path) -> bool {
     let ty = peel_type(ty);
 
-    let Type::Path(TypePath { qself: None, path }) = ty else {
+    let Type::Path(TypePath { qself: None, ref path }) = *ty else {
         return false;
     };
 
-    // Ergonomic allowance:
-    // user may write just `PartsCtx` / `RequestScope` if those names are in scope.
-    if path.is_ident(fallback_ident) {
+    // Bare ident: user wrote just `PartsCtx` / `RequestScope` without path prefix.
+    // The ident is derived from the last segment of `expected`.
+    let last_ident = &expected.segments.last().unwrap().ident;
+    if path.is_ident(last_ident) {
         return true;
     }
 
+    // Full path: `apigate::PartsCtx`, `crate::PartsCtx`, etc.
     path_eq_ignoring_args(path, expected)
 }
 
 fn path_eq_ignoring_args(a: &Path, b: &Path) -> bool {
-    // Intentionally ignore leading `::` — user may write `apigate::PartsCtx`
-    // while the expected path is `::apigate::PartsCtx`. Segment idents are
-    // compared below, which is sufficient to prevent false positives.
     if a.segments.len() != b.segments.len() {
         return false;
     }
 
     a.segments.iter().zip(b.segments.iter()).all(|(lhs, rhs)| {
-        lhs.ident == rhs.ident
-            && path_args_supported_for_special(&lhs.arguments)
-            && path_args_supported_for_special(&rhs.arguments)
+        lhs.ident == rhs.ident && !matches!(lhs.arguments, PathArguments::Parenthesized(_))
     })
-}
-
-fn path_args_supported_for_special(args: &PathArguments) -> bool {
-    match args {
-        PathArguments::None => true,
-        PathArguments::AngleBracketed(_) => true,
-        PathArguments::Parenthesized(_) => false,
-    }
 }
 
 // ---------------------------------------------------------------------------
