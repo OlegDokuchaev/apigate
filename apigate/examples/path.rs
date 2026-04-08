@@ -35,10 +35,7 @@ struct UpdateSaleService {
 
 /// Читает path-параметры через &T (без удаления из scope)
 #[apigate::hook]
-async fn log_sale_access(
-    path: &SaleIdPath,
-    ctx: &mut apigate::PartsCtx,
-) -> apigate::HookResult {
+async fn log_sale_access(path: &SaleIdPath, ctx: &mut apigate::PartsCtx) -> apigate::HookResult {
     println!("[hook] sale id={}", path.id);
     ctx.set_header("x-sale-id", &path.id.to_string())?;
     Ok(())

@@ -29,10 +29,7 @@ struct RequestMeta {
 
 /// Проверяет api key через shared state (&AppConfig из .state())
 #[apigate::hook]
-async fn require_api_key(
-    ctx: &mut apigate::PartsCtx,
-    config: &AppConfig,
-) -> apigate::HookResult {
+async fn require_api_key(ctx: &mut apigate::PartsCtx, config: &AppConfig) -> apigate::HookResult {
     let key = ctx
         .header("x-api-key")
         .ok_or_else(|| apigate::ApigateError::forbidden("missing x-api-key"))?;
