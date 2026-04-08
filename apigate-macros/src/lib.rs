@@ -8,7 +8,7 @@ mod template;
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
-use syn::{Item, ItemMod, parse_macro_input};
+use syn::{Item, ItemMod, LitStr, parse_macro_input};
 
 use expand::expand_fn_params;
 use route::expand_route_from_fn;
@@ -30,6 +30,7 @@ fn expand_service(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         prefix,
         policy,
     } = args;
+    let prefix = prefix.unwrap_or_else(|| LitStr::new("", Span::call_site()));
 
     let mut module = syn::parse::<ItemMod>(input)?;
     let apigate_path = apigate_crate_path()?;

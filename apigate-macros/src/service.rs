@@ -5,10 +5,9 @@ use syn::{Error, Ident, LitStr, Result, Token};
 
 use crate::parse::{parse_assigned, required, set_once};
 
-/// Parsed arguments of `#[apigate::service(name = "...", prefix = "...", policy = "...")]`.
 pub(crate) struct ServiceArgs {
     pub name: LitStr,
-    pub prefix: LitStr,
+    pub prefix: Option<LitStr>,
     pub policy: Option<LitStr>,
 }
 
@@ -53,7 +52,7 @@ impl Parse for ServiceArgs {
 
         Ok(Self {
             name: required(name, Span::call_site(), "missing `name = \"...\"`")?,
-            prefix: required(prefix, Span::call_site(), "missing `prefix = \"...\"`")?,
+            prefix,
             policy,
         })
     }

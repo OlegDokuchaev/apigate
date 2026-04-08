@@ -117,7 +117,11 @@ fn peel_type(mut ty: &Type) -> &Type {
 fn is_special_type(ty: &Type, expected: &Path) -> bool {
     let ty = peel_type(ty);
 
-    let Type::Path(TypePath { qself: None, ref path }) = *ty else {
+    let Type::Path(TypePath {
+        qself: None,
+        ref path,
+    }) = *ty
+    else {
         return false;
     };
 
@@ -170,9 +174,7 @@ fn validate_plans(plans: &[ParamPlan], sig: &syn::Signature, macro_name: &str) -
     if s.seen_ctx > 1 {
         return Err(syn::Error::new_spanned(
             sig,
-            format!(
-                "only one `&mut PartsCtx` parameter is allowed in #[apigate::{macro_name}]"
-            ),
+            format!("only one `&mut PartsCtx` parameter is allowed in #[apigate::{macro_name}]"),
         ));
     }
 
