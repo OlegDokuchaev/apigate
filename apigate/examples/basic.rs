@@ -32,7 +32,8 @@ async fn main() -> anyhow::Result<()> {
         .build()
         .map_err(anyhow::Error::msg)?;
 
-    print!("\
+    print!(
+        "\
 basic — http://{listen}
 
 Passthrough:   curl http://{listen}/sales/ping
@@ -41,7 +42,8 @@ Rewrite tpl:   curl http://{listen}/sales/item/abc-123/review
 Fallback:      curl http://{listen}/sales/anything
 
 Upstream:      caddy run --config apigate/examples/upstream/Caddyfile
-");
+"
+    );
 
     apigate::run(listen, app).await?;
     Ok(())

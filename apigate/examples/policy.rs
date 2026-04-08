@@ -1,5 +1,5 @@
 //! Политики: routing-стратегии и балансировщики.
-//! Демонстрирует HeaderSticky + ConsistentHash, LeastRequest, LeastTime.
+//! Демонстрирует HeaderSticky, PathSticky, ConsistentHash, LeastRequest, LeastTime.
 
 use std::net::SocketAddr;
 
@@ -14,9 +14,13 @@ async fn inject_user_id(ctx: &mut apigate::PartsCtx<'_>) -> apigate::HookResult 
 mod sales {
     use super::*;
 
-    /// Sticky sessions: запросы с одинаковым x-user-id идут на один backend
+    /// HeaderSticky: запросы с одинаковым x-user-id идут на один backend
     #[apigate::get("/user", before = [inject_user_id])]
     async fn user_profile() {}
+
+    /// PathSticky: affinity по path-параметру {id}
+    #[apigate::get("/{id}", policy = "path_sticky")]
+    async fn by_id() {}
 
     /// LeastRequest: выбирает backend с наименьшим числом in-flight запросов
     #[apigate::get("/fast", policy = "least_req")]
@@ -45,32 +49,38 @@ async fn main() -> anyhow::Result<()> {
                 .router(apigate::routing::HeaderSticky::new("x-user-id"))
                 .balancer(apigate::balancing::ConsistentHash::new()),
         )
+        // PathSticky: affinity по path-параметру {id} + consistent hash
+        .policy(
+            "path_sticky",
+            apigate::Policy::new()
+                .router(apigate::routing::PathSticky::new("id"))
+                .balancer(apigate::balancing::ConsistentHash::new()),
+        )
         // LeastRequest: наименьшее число in-flight запросов
         .policy(
             "least_req",
-            apigate::Policy::new()
-                .balancer(apigate::balancing::LeastRequest::new()),
+            apigate::Policy::new().balancer(apigate::balancing::LeastRequest::new()),
         )
         // LeastTime: наименьшая EWMA-латентность
         .policy(
             "least_time",
-            apigate::Policy::new()
-                .balancer(apigate::balancing::LeastTime::new()),
+            apigate::Policy::new().balancer(apigate::balancing::LeastTime::new()),
         )
         // RoundRobin: циклический перебор
         .policy(
             "round_robin",
-            apigate::Policy::new()
-                .balancer(apigate::balancing::RoundRobin::new()),
+            apigate::Policy::new().balancer(apigate::balancing::RoundRobin::new()),
         )
         .mount(sales::routes())
         .build()
         .map_err(anyhow::Error::msg)?;
 
-    print!("\
+    print!(
+        "\
 policy — http://{listen}
 
-Sticky:        curl -H 'x-user-id: user-1' http://{listen}/sales/user
+HeaderSticky:  curl -H 'x-user-id: user-1' http://{listen}/sales/user
+PathSticky:    curl http://{listen}/sales/abc-123
 LeastRequest:  curl http://{listen}/sales/fast
 LeastTime:     curl http://{listen}/sales/optimized
 RoundRobin:    curl http://{listen}/sales/ping
@@ -79,7 +89,8 @@ RoundRobin:    curl http://{listen}/sales/ping
 С одним backend'ом все стратегии ведут себя одинаково.
 
 Upstream:      caddy run --config apigate/examples/upstream/Caddyfile
-");
+"
+    );
 
     apigate::run(listen, app).await?;
     Ok(())
