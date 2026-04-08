@@ -16,7 +16,7 @@ impl ConsistentHash {
 
 impl Balancer for ConsistentHash {
     #[inline]
-    fn pick<'a>(&self, ctx: &'a BalanceCtx<'a>) -> Option<usize> {
+    fn pick(&self, ctx: &BalanceCtx) -> Option<usize> {
         let candidate_len = ctx.candidate_len();
         if candidate_len == 0 {
             return None;

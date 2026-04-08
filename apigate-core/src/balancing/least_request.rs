@@ -27,7 +27,7 @@ impl LeastRequest {
 }
 
 impl Balancer for LeastRequest {
-    fn pick<'a>(&self, ctx: &'a BalanceCtx<'a>) -> Option<usize> {
+    fn pick(&self, ctx: &BalanceCtx) -> Option<usize> {
         let len = ctx.candidate_len();
         if len == 0 {
             return None;
@@ -55,7 +55,7 @@ impl Balancer for LeastRequest {
         best_index
     }
 
-    fn on_start(&self, event: &StartEvent<'_>) {
+    fn on_start(&self, event: &StartEvent) {
         if let Some(counters) = self.in_flight.get() {
             if let Some(counter) = counters.get(event.backend_index) {
                 counter.fetch_add(1, Ordering::Relaxed);
@@ -63,7 +63,7 @@ impl Balancer for LeastRequest {
         }
     }
 
-    fn on_result(&self, event: &ResultEvent<'_>) {
+    fn on_result(&self, event: &ResultEvent) {
         if let Some(counters) = self.in_flight.get() {
             if let Some(counter) = counters.get(event.backend_index) {
                 counter.fetch_sub(1, Ordering::Relaxed);

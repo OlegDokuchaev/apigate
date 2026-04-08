@@ -29,7 +29,7 @@ impl LeastTime {
 }
 
 impl Balancer for LeastTime {
-    fn pick<'a>(&self, ctx: &'a BalanceCtx<'a>) -> Option<usize> {
+    fn pick(&self, ctx: &BalanceCtx) -> Option<usize> {
         let len = ctx.candidate_len();
         if len == 0 {
             return None;

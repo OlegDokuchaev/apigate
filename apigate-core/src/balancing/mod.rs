@@ -82,9 +82,9 @@ pub struct ResultEvent<'a> {
 }
 
 pub trait Balancer: Send + Sync + 'static {
-    fn pick<'a>(&self, ctx: &'a BalanceCtx<'a>) -> Option<usize>;
+    fn pick(&self, ctx: &BalanceCtx) -> Option<usize>;
 
-    fn on_start(&self, _event: &StartEvent<'_>) {}
+    fn on_start(&self, _event: &StartEvent) {}
 
-    fn on_result(&self, _event: &ResultEvent<'_>) {}
+    fn on_result(&self, _event: &ResultEvent) {}
 }
