@@ -14,7 +14,7 @@ impl HeaderSticky {
 }
 
 impl RouteStrategy for HeaderSticky {
-    fn route<'a>(&self, ctx: &'_ RouteCtx<'a>, _pool: &'a BackendPool) -> RoutingDecision<'a> {
+    fn route<'a>(&self, ctx: &RouteCtx<'a>, _pool: &'a BackendPool) -> RoutingDecision<'a> {
         let affinity = ctx
             .headers
             .get(self.header)

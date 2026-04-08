@@ -53,5 +53,5 @@ pub struct RoutingDecision<'a> {
 }
 
 pub trait RouteStrategy: Send + Sync + 'static {
-    fn route<'a>(&self, ctx: &'_ RouteCtx<'a>, pool: &'a BackendPool) -> RoutingDecision<'a>;
+    fn route<'a>(&self, ctx: &RouteCtx<'a>, pool: &'a BackendPool) -> RoutingDecision<'a>;
 }

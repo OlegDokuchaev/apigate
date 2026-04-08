@@ -14,7 +14,7 @@ impl PathSticky {
 }
 
 impl RouteStrategy for PathSticky {
-    fn route<'a>(&self, ctx: &'_ RouteCtx<'a>, _pool: &'a BackendPool) -> RoutingDecision<'a> {
+    fn route<'a>(&self, ctx: &RouteCtx<'a>, _pool: &'a BackendPool) -> RoutingDecision<'a> {
         let affinity = extract_param(ctx.route_path, ctx.prefix, ctx.uri.path(), self.param)
             .map(AffinityKey::borrowed);
 
