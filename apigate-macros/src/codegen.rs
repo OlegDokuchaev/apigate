@@ -45,7 +45,7 @@ pub(crate) fn generate_pipeline_wrapper(
         #[doc(hidden)]
         fn #pipeline_ident<'a>(
             mut ctx: #apigate_path::PartsCtx<'a>,
-            mut scope: #apigate_path::RequestScope,
+            mut scope: #apigate_path::RequestScope<'a>,
         ) -> #apigate_path::PipelineFuture<'a> {
             ::std::boxed::Box::pin(async move {
                 #path_phase

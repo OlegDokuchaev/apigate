@@ -369,7 +369,7 @@ pub(crate) fn expand_fn_params(
         .push(syn::parse_quote!(#ctx_ident: &mut #apigate::PartsCtx<'_>));
     f.sig
         .inputs
-        .push(syn::parse_quote!(#scope_ident: &mut #apigate::RequestScope));
+        .push(syn::parse_quote!(#scope_ident: &mut #apigate::RequestScope<'_>));
 
     let generated_stmts = build_bindings(&plans, &apigate, &ctx_ident, &scope_ident)?;
     if !generated_stmts.is_empty() {
