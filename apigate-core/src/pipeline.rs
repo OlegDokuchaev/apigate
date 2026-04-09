@@ -17,24 +17,15 @@ use crate::error::ApigateError;
 /// App-level state lives in a shared `Arc<Extensions>` (zero-copy per request).
 /// Per-request data (path params, hook insertions) goes into a local `Extensions`
 /// that starts empty and allocates only on first `insert`.
-pub struct RequestScope {
-    shared: Arc<Extensions>,
+pub struct RequestScope<'a> {
+    shared: &'a Extensions,
     local: Extensions,
     body: Option<Body>,
     body_limit: usize,
 }
 
-impl RequestScope {
-    pub fn new(body: Body, body_limit: usize) -> Self {
-        Self {
-            shared: Arc::new(Extensions::new()),
-            local: Extensions::new(),
-            body: Some(body),
-            body_limit,
-        }
-    }
-
-    pub(crate) fn with_shared(shared: Arc<Extensions>, body: Body, body_limit: usize) -> Self {
+impl<'a> RequestScope<'a> {
+    pub fn new(shared: &'a Extensions, body: Body, body_limit: usize) -> Self {
         Self {
             shared,
             local: Extensions::new(),
@@ -54,7 +45,9 @@ impl RequestScope {
     /// Returns a shared reference to `T`.
     /// Checks local (per-request) extensions first, then shared (app) state.
     pub fn get<T: Send + Sync + 'static>(&self) -> Option<&T> {
-        self.local.get::<T>().or_else(|| self.shared.get::<T>())
+        self.local
+            .get::<T>()
+            .or_else(|| self.shared.get::<T>())
     }
 
     /// Returns a mutable reference to `T` from local (per-request) extensions only.
@@ -81,7 +74,7 @@ impl RequestScope {
 
 /// Single function that orchestrates all request processing:
 /// parse path params → before hooks → validate/parse body → map → return body.
-pub type PipelineFn = for<'a> fn(PartsCtx<'a>, RequestScope) -> PipelineFuture<'a>;
+pub type PipelineFn = for<'a> fn(PartsCtx<'a>, RequestScope<'a>) -> PipelineFuture<'a>;
 pub type PipelineFuture<'a> = Pin<Box<dyn Future<Output = PipelineResult> + Send + 'a>>;
 pub type PipelineResult = Result<Body, ApigateError>;
 
