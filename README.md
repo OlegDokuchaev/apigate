@@ -21,12 +21,7 @@ async fn main() -> anyhow::Result<()> {
         .request_timeout(std::time::Duration::from_secs(10))
         .connect_timeout(std::time::Duration::from_secs(3))
         .pool_idle_timeout(std::time::Duration::from_secs(60))
-        .policy(
-            "sales_default",
-            apigate::Policy::new()
-                .router(apigate::routing::HeaderSticky::new("x-user-id"))
-                .balancer(apigate::balancing::ConsistentHash::new()),
-        )
+        .policy("sales_default", apigate::Policy::header_sticky("x-user-id"))
         .mount(sales::routes!())
         .mount(files::routes!())
         .build()?;
@@ -205,10 +200,17 @@ async fn buy() {}
 Политика = routing (какие backend'ы) + balancing (какой конкретно). Дефолт: `NoRouteKey` + `RoundRobin`.
 
 ```rust
-.policy("sticky_sales", apigate::Policy::new()
-    .router(apigate::routing::HeaderSticky::new("x-user-id"))
-    .balancer(apigate::balancing::ConsistentHash::new()))
+.policy("sticky_sales", apigate::Policy::header_sticky("x-user-id"))
+.policy("sticky_by_id", apigate::Policy::path_sticky("id"))
 ```
+
+Встроенные пресеты:
+- `Policy::header_sticky("x-user-id")` = `HeaderSticky + ConsistentHash`
+- `Policy::path_sticky("id")` = `PathSticky + ConsistentHash`
+- `Policy::consistent_hash()`
+- `Policy::least_request()`
+- `Policy::least_time()`
+- `Policy::round_robin()`
 
 Приоритет: атрибут маршрута > политика сервиса > дефолтная.
 
@@ -307,7 +309,7 @@ async fn auth(ctx: &mut apigate::PartsCtx, config: &AuthConfig) -> apigate::Hook
 }
 ```
 
-State хранится в `Arc<Extensions>` — **не клонируется** на каждый запрос. `scope.get::<T>()` читает shared-ссылку. `scope.insert()` / `scope.take()` работают с per-request хранилищем.
+State хранится в `Extensions` внутри state роутера и передаётся в `RequestScope` по ссылке — **без per-request clone**. `scope.get::<T>()` читает shared-ссылку. `scope.insert()` / `scope.take()` работают с per-request хранилищем.
 
 ---
 
@@ -315,8 +317,9 @@ State хранится в `Arc<Extensions>` — **не клонируется** 
 
 * Без `json/query/form` — body проксируется без чтения (streaming)
 * `json = T` без `map` — валидация + passthrough оригинального тела
-* State: `Arc<Extensions>`, 0 heap-аллокаций для read-only доступа
+* State: shared `Extensions` по ссылке, 0 heap-аллокаций для read-only доступа
 * Pipeline: path + hooks + body в одном `Box::pin`
+* Route meta: индекс в таблице метаданных (`usize`) вместо `Arc<RouteMeta>` в request path
 * HTTP-клиент: `TCP_NODELAY`, connection pooling, keep-alive
 * `request_timeout` → `504 Gateway Timeout`
 * Балансировщики lock-free (atomic counters)
