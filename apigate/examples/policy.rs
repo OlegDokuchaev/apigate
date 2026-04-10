@@ -43,34 +43,15 @@ async fn main() -> anyhow::Result<()> {
         // Несколько backend'ов — балансировка видна в ответах
         .backend("sales", ["http://127.0.0.1:8081"])
         // HeaderSticky: affinity по x-user-id + consistent hash
-        .policy(
-            "sticky",
-            apigate::Policy::new()
-                .router(apigate::routing::HeaderSticky::new("x-user-id"))
-                .balancer(apigate::balancing::ConsistentHash::new()),
-        )
+        .policy("sticky", apigate::Policy::header_sticky("x-user-id"))
         // PathSticky: affinity по path-параметру {id} + consistent hash
-        .policy(
-            "path_sticky",
-            apigate::Policy::new()
-                .router(apigate::routing::PathSticky::new("id"))
-                .balancer(apigate::balancing::ConsistentHash::new()),
-        )
+        .policy("path_sticky", apigate::Policy::path_sticky("id"))
         // LeastRequest: наименьшее число in-flight запросов
-        .policy(
-            "least_req",
-            apigate::Policy::new().balancer(apigate::balancing::LeastRequest::new()),
-        )
+        .policy("least_req", apigate::Policy::least_request())
         // LeastTime: наименьшая EWMA-латентность
-        .policy(
-            "least_time",
-            apigate::Policy::new().balancer(apigate::balancing::LeastTime::new()),
-        )
+        .policy("least_time", apigate::Policy::least_time())
         // RoundRobin: циклический перебор
-        .policy(
-            "round_robin",
-            apigate::Policy::new().balancer(apigate::balancing::RoundRobin::new()),
-        )
+        .policy("round_robin", apigate::Policy::round_robin())
         .mount(sales::routes())
         .build()
         .map_err(anyhow::Error::msg)?;
