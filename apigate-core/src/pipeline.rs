@@ -1,6 +1,5 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 
 use axum::body::Body;
 use http::Extensions;
@@ -45,9 +44,7 @@ impl<'a> RequestScope<'a> {
     /// Returns a shared reference to `T`.
     /// Checks local (per-request) extensions first, then shared (app) state.
     pub fn get<T: Send + Sync + 'static>(&self) -> Option<&T> {
-        self.local
-            .get::<T>()
-            .or_else(|| self.shared.get::<T>())
+        self.local.get::<T>().or_else(|| self.shared.get::<T>())
     }
 
     /// Returns a mutable reference to `T` from local (per-request) extensions only.
