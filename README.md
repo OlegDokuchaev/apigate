@@ -14,16 +14,14 @@ async fn main() -> anyhow::Result<()> {
     let cfg = AppConfig::from_env();
 
     let app = apigate::App::builder()
-        .backend("sales", cfg.sales_backends)
-        .backend("files", cfg.files_backends)
+        .mount_service(sales::routes(), cfg.sales_backends)
+        .mount_service(files::routes(), cfg.files_backends)
         .state(cfg.db_pool.clone())
         .state(cfg.auth_config.clone())
         .request_timeout(std::time::Duration::from_secs(10))
         .connect_timeout(std::time::Duration::from_secs(3))
         .pool_idle_timeout(std::time::Duration::from_secs(60))
         .policy("sales_default", apigate::Policy::header_sticky("x-user-id"))
-        .mount(sales::routes!())
-        .mount(files::routes!())
         .build()?;
 
     apigate::run(cfg.listen, app).await
