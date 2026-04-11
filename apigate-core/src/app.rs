@@ -130,6 +130,23 @@ impl AppBuilder {
         self
     }
 
+    /// Registers backend URLs for `routes.service` and mounts these routes.
+    ///
+    /// Equivalent to:
+    /// `builder.backend(routes.service, urls).mount(routes)`
+    pub fn mount_service<I, S>(mut self, routes: Routes, urls: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.backends.insert(
+            routes.service.to_string(),
+            urls.into_iter().map(|s| s.into()).collect(),
+        );
+        self.mounted.push(routes);
+        self
+    }
+
     pub fn build(self) -> Result<App, ApigateBuildError> {
         // HTTP client
         let mut connector = HttpConnector::new();
@@ -174,7 +191,7 @@ impl AppBuilder {
                 })?
                 .clone();
 
-            router = mount_service(
+            router = mount_routes(
                 router,
                 svc_routes,
                 &self.policies,
@@ -217,7 +234,7 @@ pub async fn run(addr: SocketAddr, app: App) -> std::io::Result<()> {
     axum::serve(listener, app.router).await
 }
 
-fn mount_service(
+fn mount_routes(
     mut router: Router<Arc<Inner>>,
     routes: Routes,
     policies: &HashMap<String, Arc<Policy>>,
