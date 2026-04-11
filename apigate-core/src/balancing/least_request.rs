@@ -26,6 +26,12 @@ impl LeastRequest {
     }
 }
 
+impl Default for LeastRequest {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Balancer for LeastRequest {
     fn pick(&self, ctx: &BalanceCtx) -> Option<usize> {
         let len = ctx.candidate_len();

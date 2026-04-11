@@ -14,6 +14,12 @@ impl ConsistentHash {
     }
 }
 
+impl Default for ConsistentHash {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Balancer for ConsistentHash {
     #[inline]
     fn pick(&self, ctx: &BalanceCtx) -> Option<usize> {

@@ -28,6 +28,12 @@ impl LeastTime {
     }
 }
 
+impl Default for LeastTime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Balancer for LeastTime {
     fn pick(&self, ctx: &BalanceCtx) -> Option<usize> {
         let len = ctx.candidate_len();

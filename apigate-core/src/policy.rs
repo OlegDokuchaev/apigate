@@ -67,3 +67,9 @@ impl Policy {
         self
     }
 }
+
+impl Default for Policy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
