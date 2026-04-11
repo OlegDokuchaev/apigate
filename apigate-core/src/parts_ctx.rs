@@ -1,6 +1,6 @@
 use axum::extract::FromRequestParts;
 
-use crate::error::ApigateError;
+use crate::error::{ApigateCoreError, ApigateError};
 use http::header::{HeaderName, HeaderValue};
 use http::request::Parts;
 
@@ -58,10 +58,10 @@ impl<'a> PartsCtx<'a> {
     ) -> Result<(), ApigateError> {
         let name = name
             .try_into()
-            .map_err(|_| ApigateError::bad_request("invalid header name"))?;
+            .map_err(|_| ApigateError::from(ApigateCoreError::InvalidHeaderName))?;
         let value = value
             .try_into()
-            .map_err(|_| ApigateError::bad_request("invalid header value"))?;
+            .map_err(|_| ApigateError::from(ApigateCoreError::InvalidHeaderValue))?;
 
         self.parts.headers.insert(name, value);
         Ok(())
@@ -74,14 +74,14 @@ impl<'a> PartsCtx<'a> {
     ) -> Result<(), ApigateError> {
         let name = name
             .try_into()
-            .map_err(|_| ApigateError::bad_request("invalid header name"))?;
+            .map_err(|_| ApigateError::from(ApigateCoreError::InvalidHeaderName))?;
         if self.parts.headers.contains_key(&name) {
             return Ok(());
         }
 
         let value = value
             .try_into()
-            .map_err(|_| ApigateError::bad_request("invalid header value"))?;
+            .map_err(|_| ApigateError::from(ApigateCoreError::InvalidHeaderValue))?;
 
         self.parts.headers.insert(name, value);
         Ok(())
@@ -107,6 +107,6 @@ impl<'a> PartsCtx<'a> {
         axum::extract::Path::<T>::from_request_parts(self.parts, &())
             .await
             .map(|p| p.0)
-            .map_err(|_| ApigateError::bad_request("invalid path parameters"))
+            .map_err(|_| ApigateError::from(ApigateCoreError::InvalidPathParameters))
     }
 }

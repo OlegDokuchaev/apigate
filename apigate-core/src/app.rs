@@ -5,7 +5,6 @@ use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::{Request as AxumRequest, State};
-use axum::response::IntoResponse;
 use axum::routing;
 use axum::{Extension, Router};
 
@@ -15,11 +14,15 @@ use hyper_util::rt::{TokioExecutor, TokioTimer};
 
 use crate::backend::{BackendPool, BaseUri};
 use crate::balancing::{BalanceCtx, ProxyErrorKind, ResultEvent, RoundRobin, StartEvent};
+use crate::error::{
+    ApigateBuildError, ApigateCoreError, ApigateFrameworkError, ErrorRenderer,
+    default_error_renderer,
+};
 use crate::policy::Policy;
-use crate::proxy::{bad_gateway, gateway_timeout, proxy_request};
+use crate::proxy::proxy_request;
 use crate::route::{FixedRewrite, Rewrite, RewriteSpec, RouteMeta};
 use crate::routing::{NoRouteKey, RouteCtx};
-use crate::{Method, PartsCtx, RequestScope, Routes};
+use crate::{ApigateError, Method, PartsCtx, RequestScope, Routes};
 
 struct Inner {
     client: Client<HttpConnector, Body>,
@@ -27,6 +30,7 @@ struct Inner {
     map_body_limit: usize,
     request_timeout: Duration,
     route_metas: Box<[RouteMeta]>,
+    error_renderer: Arc<ErrorRenderer>,
 }
 
 pub struct App {
@@ -43,6 +47,7 @@ pub struct AppBuilder {
     pool_idle_timeout: Duration,
     map_body_limit: usize,
     state: http::Extensions,
+    error_renderer: Arc<ErrorRenderer>,
 }
 
 impl AppBuilder {
@@ -57,6 +62,7 @@ impl AppBuilder {
             pool_idle_timeout: Duration::from_secs(90),
             map_body_limit: 2 * 1024 * 1024,
             state: http::Extensions::new(),
+            error_renderer: Arc::new(default_error_renderer),
         }
     }
 
@@ -107,12 +113,24 @@ impl AppBuilder {
         self
     }
 
+    /// Sets the renderer for framework-generated errors (`ApigateError::*` constructors).
+    ///
+    /// This lets applications return a uniform JSON error envelope instead of plain text.
+    /// The renderer is used both for pipeline errors and proxy/runtime errors (502/504, etc.).
+    pub fn error_renderer<F>(mut self, renderer: F) -> Self
+    where
+        F: Fn(ApigateFrameworkError) -> axum::response::Response + Send + Sync + 'static,
+    {
+        self.error_renderer = Arc::new(renderer);
+        self
+    }
+
     pub fn mount(mut self, routes: Routes) -> Self {
         self.mounted.push(routes);
         self
     }
 
-    pub fn build(self) -> Result<App, String> {
+    pub fn build(self) -> Result<App, ApigateBuildError> {
         // HTTP client
         let mut connector = HttpConnector::new();
         connector.set_nodelay(true);
@@ -144,17 +162,15 @@ impl AppBuilder {
             pools.insert(svc, Arc::new(BackendPool::new(bases)));
         }
 
-        // build router with state
+        // build router + route metadata table
         let mut router = Router::new();
+        let mut route_metas = Vec::new();
 
         for svc_routes in self.mounted {
             let pool = pools
                 .get(svc_routes.service)
-                .ok_or_else(|| {
-                    format!(
-                        "backend for service `{}` is not registered",
-                        svc_routes.service,
-                    )
+                .ok_or(ApigateBuildError::BackendNotRegistered {
+                    service: svc_routes.service,
                 })?
                 .clone();
 
@@ -183,6 +199,12 @@ impl AppBuilder {
     }
 }
 
+impl Default for AppBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl App {
     pub fn builder() -> AppBuilder {
         AppBuilder::new()
@@ -201,19 +223,8 @@ fn mount_service(
     policies: &HashMap<String, Arc<Policy>>,
     default_policy: Arc<Policy>,
     pool: Arc<BackendPool>,
-) -> Result<Router<Arc<Inner>>, String> {
-    // проверим что backend зарегистрирован
-    // (в минимальной версии лучше фейлиться сразу)
-    // В будущем тут будет ServiceRegistry/PolicyRegistry.
-    //
-    // NOTE: State<Inner> у нас хранит HashMap<String, BackendPool>.
-    // Мы проверяем наличие ключа на запросе в handler'е тоже, но ранняя проверка приятнее.
-    // Т.к. mounted routes имеют &'static str service, мы делаем check на build-time.
-    //
-    // Здесь нет доступа к Inner.backends (он внутри Arc), поэтому check сделаем в handler'е.
-    // (Можно перестроить на builder-time, но это минимальная версия.)
-
     route_metas: &mut Vec<RouteMeta>,
+) -> Result<Router<Arc<Inner>>, ApigateBuildError> {
     for rd in routes.routes {
         let full_path = join(routes.prefix, rd.path);
         let policy = resolve_policy(routes.policy, rd.policy, policies, &default_policy)?;
@@ -248,14 +259,14 @@ fn resolve_policy(
     route_policy: Option<&'static str>,
     registry: &HashMap<String, Arc<Policy>>,
     default_policy: &Arc<Policy>,
-) -> Result<Arc<Policy>, String> {
+) -> Result<Arc<Policy>, ApigateBuildError> {
     let effective = route_policy.or(service_policy);
 
     match effective {
         Some(name) => registry
             .get(name)
             .cloned()
-            .ok_or_else(|| format!("policy `{name}` is not registered")),
+            .ok_or(ApigateBuildError::PolicyNotRegistered { name }),
         None => Ok(default_policy.clone()),
     }
 }
@@ -306,7 +317,7 @@ async fn proxy_handler(
 
         match pipeline(ctx, scope).await {
             Ok(body) => body,
-            Err(err) => return err.into_response(),
+            Err(err) => return err.into_response_with(inner.error_renderer.as_ref()),
         }
     } else {
         body
@@ -331,10 +342,12 @@ async fn proxy_handler(
         candidates: routing.candidates,
     };
     let Some(backend_index) = meta.policy.balancer.pick(&balance_ctx) else {
-        return bad_gateway("no backends selected by balancer");
+        return ApigateError::from(ApigateCoreError::NoBackendsSelectedByBalancer)
+            .into_response_with(inner.error_renderer.as_ref());
     };
     let Some(backend) = pool.get(backend_index) else {
-        return bad_gateway("balancer returned invalid backend index");
+        return ApigateError::from(ApigateCoreError::InvalidBackendIndex)
+            .into_response_with(inner.error_renderer.as_ref());
     };
 
     // Make request
@@ -378,10 +391,20 @@ async fn proxy_handler(
             });
 
             match error {
-                ProxyErrorKind::NoBackends => bad_gateway("no backends"),
-                ProxyErrorKind::InvalidUpstreamUri => bad_gateway("bad upstream uri"),
-                ProxyErrorKind::UpstreamRequest => bad_gateway("upstream request failed"),
-                ProxyErrorKind::Timeout => gateway_timeout("upstream request timed out"),
+                ProxyErrorKind::NoBackends => ApigateError::from(ApigateCoreError::NoBackends)
+                    .into_response_with(inner.error_renderer.as_ref()),
+                ProxyErrorKind::InvalidUpstreamUri => {
+                    ApigateError::from(ApigateCoreError::InvalidUpstreamUri)
+                        .into_response_with(inner.error_renderer.as_ref())
+                }
+                ProxyErrorKind::UpstreamRequest => {
+                    ApigateError::from(ApigateCoreError::UpstreamRequestFailed)
+                        .into_response_with(inner.error_renderer.as_ref())
+                }
+                ProxyErrorKind::Timeout => {
+                    ApigateError::from(ApigateCoreError::UpstreamRequestTimedOut)
+                        .into_response_with(inner.error_renderer.as_ref())
+                }
             }
         }
     }

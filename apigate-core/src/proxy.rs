@@ -7,7 +7,7 @@ use http::header::{
 };
 use http::request::Parts;
 use http::uri::{PathAndQuery, Uri};
-use http::{HeaderMap, HeaderName, Request, Response, StatusCode};
+use http::{HeaderMap, HeaderName, Request, Response};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use smallvec::SmallVec;
@@ -251,24 +251,4 @@ pub fn strip_hop_headers(headers: &mut HeaderMap) {
     headers.remove(UPGRADE);
     headers.remove("keep-alive");
     headers.remove("proxy-connection");
-}
-
-// ---------------------------------------------------------------------------
-// Error response
-// ---------------------------------------------------------------------------
-
-pub fn bad_gateway(msg: impl Into<Body>) -> Response<Body> {
-    Response::builder()
-        .status(StatusCode::BAD_GATEWAY)
-        .header(http::header::CONTENT_TYPE, "text/plain; charset=utf-8")
-        .body(msg.into())
-        .unwrap()
-}
-
-pub fn gateway_timeout(msg: impl Into<Body>) -> Response<Body> {
-    Response::builder()
-        .status(StatusCode::GATEWAY_TIMEOUT)
-        .header(http::header::CONTENT_TYPE, "text/plain; charset=utf-8")
-        .body(msg.into())
-        .unwrap()
 }

@@ -10,7 +10,10 @@ mod route;
 pub mod routing;
 
 pub use app::{App, AppBuilder, run};
-pub use error::ApigateError;
+pub use error::{
+    ApigateBuildError, ApigateCoreError, ApigateError, ApigateFrameworkError, ApigatePipelineError,
+    BaseUriParseError, default_error_renderer,
+};
 pub use parts_ctx::PartsCtx;
 pub use pipeline::{
     HookResult, MapResult, PipelineFn, PipelineFuture, PipelineResult, RequestScope,

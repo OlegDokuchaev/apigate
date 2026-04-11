@@ -17,3 +17,4 @@ hyper-util = { version = "0.1", features = ["tokio", "client", "client-legacy"] 
 http = "1"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 smallvec = "1"
+thiserror = "2"

@@ -2,6 +2,8 @@ use http::Uri;
 use http::header::HeaderValue;
 use http::uri::{Authority, Scheme};
 
+use crate::error::BaseUriParseError;
+
 #[derive(Clone, Debug)]
 pub struct BaseUri {
     pub scheme: Scheme,
@@ -13,20 +15,31 @@ pub struct BaseUri {
 }
 
 impl BaseUri {
-    pub fn parse(s: &str) -> Result<Self, String> {
-        let uri: Uri = s.parse().map_err(|e| format!("invalid uri `{s}`: {e}"))?;
+    pub fn parse(s: &str) -> Result<Self, BaseUriParseError> {
+        let uri: Uri = s.parse().map_err(|source| BaseUriParseError::InvalidUri {
+            input: s.to_owned(),
+            source,
+        })?;
         let scheme = uri
             .scheme()
             .cloned()
-            .ok_or_else(|| format!("uri `{s}` missing scheme (expected http://...)"))?;
-        let authority = uri
-            .authority()
-            .cloned()
-            .ok_or_else(|| format!("uri `{s}` missing authority (expected http://host:port)"))?;
+            .ok_or_else(|| BaseUriParseError::MissingScheme {
+                input: s.to_owned(),
+            })?;
+        let authority =
+            uri.authority()
+                .cloned()
+                .ok_or_else(|| BaseUriParseError::MissingAuthority {
+                    input: s.to_owned(),
+                })?;
 
         let prefix = format!("{scheme}://{authority}");
-        let host_header = HeaderValue::from_str(authority.as_str())
-            .map_err(|e| format!("invalid authority for Host header `{authority}`: {e}"))?;
+        let host_header = HeaderValue::from_str(authority.as_str()).map_err(|source| {
+            BaseUriParseError::InvalidHostHeader {
+                authority: authority.as_str().to_owned(),
+                source,
+            }
+        })?;
 
         Ok(Self {
             scheme,
