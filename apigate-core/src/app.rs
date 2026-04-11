@@ -26,6 +26,7 @@ struct Inner {
     state: http::Extensions,
     map_body_limit: usize,
     request_timeout: Duration,
+    route_metas: Box<[RouteMeta]>,
 }
 
 pub struct App {
@@ -124,24 +125,24 @@ impl AppBuilder {
             .build(connector);
 
         // backend pools
-        let pools: HashMap<_, _> = self
-            .backends
-            .into_iter()
-            .map(|(svc, urls)| {
-                let bases = urls
-                    .iter()
-                    .map(|u| BaseUri::parse(u))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok((svc, Arc::new(BackendPool::new(bases))))
-            })
-            .collect::<Result<_, String>>()?;
-
-        let inner = Arc::new(Inner {
-            client,
-            state: self.state,
-            request_timeout: self.request_timeout,
-            map_body_limit: self.map_body_limit,
-        });
+        let mut pools: HashMap<String, Arc<BackendPool>> = HashMap::new();
+        for (svc, urls) in self.backends {
+            let mut bases = Vec::with_capacity(urls.len());
+            for url in urls {
+                let base = match BaseUri::parse(&url) {
+                    Ok(base) => base,
+                    Err(source) => {
+                        return Err(ApigateBuildError::InvalidBackendUri {
+                            service: svc.clone(),
+                            url,
+                            source,
+                        });
+                    }
+                };
+                bases.push(base);
+            }
+            pools.insert(svc, Arc::new(BackendPool::new(bases)));
+        }
 
         // build router with state
         let mut router = Router::new();
@@ -163,8 +164,18 @@ impl AppBuilder {
                 &self.policies,
                 self.default_policy.clone(),
                 pool,
+                &mut route_metas,
             )?;
         }
+
+        let inner = Arc::new(Inner {
+            client,
+            state: self.state,
+            request_timeout: self.request_timeout,
+            map_body_limit: self.map_body_limit,
+            route_metas: route_metas.into_boxed_slice(),
+            error_renderer: self.error_renderer,
+        });
 
         let router = router.with_state(inner);
 
@@ -202,12 +213,12 @@ fn mount_service(
     // Здесь нет доступа к Inner.backends (он внутри Arc), поэтому check сделаем в handler'е.
     // (Можно перестроить на builder-time, но это минимальная версия.)
 
+    route_metas: &mut Vec<RouteMeta>,
     for rd in routes.routes {
         let full_path = join(routes.prefix, rd.path);
-
         let policy = resolve_policy(routes.policy, rd.policy, policies, &default_policy)?;
 
-        let meta = Arc::new(RouteMeta {
+        let meta = RouteMeta {
             service: routes.service,
             route_path: rd.path,
             prefix: routes.prefix,
@@ -219,9 +230,12 @@ fn mount_service(
             pool: Arc::clone(&pool),
             policy,
             pipeline: rd.pipeline,
-        });
+        };
 
-        let method_router = method_router(rd.method).layer(Extension(meta));
+        let route_idx = route_metas.len();
+        route_metas.push(meta);
+
+        let method_router = method_router(rd.method).layer(Extension(route_idx));
 
         router = router.route(&full_path, method_router);
     }
@@ -278,9 +292,10 @@ fn method_router(method: Method) -> routing::MethodRouter<Arc<Inner>> {
 
 async fn proxy_handler(
     State(inner): State<Arc<Inner>>,
-    Extension(meta): Extension<Arc<RouteMeta>>,
+    Extension(route_idx): Extension<usize>,
     req: AxumRequest,
 ) -> axum::response::Response {
+    let meta = &inner.route_metas[route_idx];
     let pool = &meta.pool;
     let (mut parts, body) = req.into_parts();
 
@@ -332,7 +347,7 @@ async fn proxy_handler(
 
     let result = tokio::time::timeout(
         inner.request_timeout,
-        proxy_request(backend, &inner.client, &meta, parts, body),
+        proxy_request(backend, &inner.client, meta, parts, body),
     )
     .await
     .unwrap_or_else(|_| Err(ProxyErrorKind::Timeout));
