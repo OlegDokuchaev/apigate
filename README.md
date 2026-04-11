@@ -166,6 +166,127 @@ async fn buy() {}
 
 ---
 
+## Ошибки
+
+По умолчанию `ApigateError` возвращается как `text/plain`.
+Полный runnable пример: `cargo run --example errors`.
+
+Для единого JSON-формата можно задать глобальный рендерер
+(он применяется и к pipeline, и к proxy/runtime ошибкам вроде 502/504):
+
+```rust
+use axum::response::IntoResponse;
+use http::StatusCode;
+
+fn render_error(err: apigate::ApigateFrameworkError) -> axum::response::Response {
+    use apigate::{ApigateFrameworkError, ApigatePipelineError};
+
+    match &err {
+        ApigateFrameworkError::Pipeline(ApigatePipelineError::InvalidJsonBody(details)) => {
+            eprintln!("[apigate][invalid_json_body] details={details}");
+            let body = serde_json::json!({
+                "error": {
+                    "code": "invalid_json_payload",
+                    "message": "invalid json payload",
+                }
+            });
+            return (StatusCode::UNPROCESSABLE_ENTITY, axum::Json(body)).into_response();
+        }
+        _ => {
+            if let Some(details) = err.debug_details() {
+                eprintln!("[apigate][debug] code={} details={details}", err.code());
+            }
+        }
+    }
+
+    let body = serde_json::json!({
+        "error": {
+            "code": err.code(),
+            "message": err.user_message(),
+        }
+    });
+    (err.status_code(), axum::Json(body)).into_response()
+}
+
+let app = apigate::App::builder()
+    .error_renderer(render_error)
+    // ...
+    .build()?;
+```
+
+`ApigateFrameworkError` нормализован по `code` (`err.code()`):
+- `bad_request`
+- `unauthorized`
+- `forbidden`
+- `payload_too_large`
+- `unsupported_media_type`
+- `bad_gateway`
+- `gateway_timeout`
+- `internal`
+
+Также есть внутренние коды из `ApigateCoreError` и `ApigatePipelineError`
+(например `invalid_header_name`, `invalid_json_body`, `request_body_too_large`).
+
+Если нужно логировать низкоуровневую причину (не отдавая её клиенту),
+используй `err.debug_details()`.
+
+Ошибки конфигурации при сборке приложения (например, незарегистрированный backend/policy
+или невалидный upstream URI) возвращаются из `.build()` как `ApigateBuildError`.
+
+Из `before` / `map` можно вернуть полностью кастомный ответ:
+
+```rust
+#[apigate::hook]
+async fn auth(ctx: &mut apigate::PartsCtx) -> apigate::HookResult {
+    if ctx.header("authorization").is_none() {
+        return Err(apigate::ApigateError::from_response((
+            http::StatusCode::UNAUTHORIZED,
+            axum::Json(serde_json::json!({
+                "error": {
+                    "code": "auth_missing_token",
+                    "message": "missing authorization header"
+                }
+            })),
+        )));
+    }
+    Ok(())
+}
+```
+
+Удобный sugar для JSON:
+
+```rust
+#[derive(serde::Serialize)]
+struct ErrBody {
+    code: &'static str,
+    message: String,
+}
+
+return Err(apigate::ApigateError::json(
+    http::StatusCode::UNAUTHORIZED,
+    &ErrBody {
+        code: "auth_missing",
+        message: "missing token".into(),
+    },
+));
+```
+
+Ещё короче для частых статусов:
+
+```rust
+return Err(apigate::ApigateError::unauthorized_json(&ErrBody {
+    code: "auth_missing",
+    message: "missing token".into(),
+}));
+```
+
+Доступные sugar-методы:
+- `ApigateError::bad_request_json(...)`
+- `ApigateError::unauthorized_json(...)`
+- `ApigateError::forbidden_json(...)`
+
+---
+
 ## Инъекция параметров в `hook` / `map`
 
 Макрос анализирует типы параметров и генерирует код извлечения:
