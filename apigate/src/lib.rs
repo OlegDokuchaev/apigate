@@ -11,8 +11,9 @@ pub use apigate_core::balancing;
 pub use apigate_core::policy::Policy;
 pub use apigate_core::routing;
 pub use apigate_core::{
-    ApigateError, App, AppBuilder, DstChunk, HookResult, MapResult, Method, PartsCtx, PipelineFn,
-    PipelineFuture, PipelineResult, RequestScope, RewriteSpec, RewriteTemplate, RouteDef, Routes,
-    SrcSeg, run,
+    ApigateBuildError, ApigateCoreError, ApigateError, ApigateFrameworkError, ApigatePipelineError,
+    App, AppBuilder, BaseUriParseError, DstChunk, HookResult, MapResult, Method, PartsCtx,
+    PipelineFn, PipelineFuture, PipelineResult, RequestScope, RewriteSpec, RewriteTemplate,
+    RouteDef, Routes, SrcSeg, default_error_renderer, run,
 };
 pub use apigate_macros::*;
