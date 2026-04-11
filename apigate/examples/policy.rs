@@ -41,7 +41,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = apigate::App::builder()
         // Несколько backend'ов — балансировка видна в ответах
-        .backend("sales", ["http://127.0.0.1:8081"])
+        .mount_service(sales::routes(), ["http://127.0.0.1:8081"])
         // HeaderSticky: affinity по x-user-id + consistent hash
         .policy("sticky", apigate::Policy::header_sticky("x-user-id"))
         // PathSticky: affinity по path-параметру {id} + consistent hash
@@ -52,7 +52,6 @@ async fn main() -> anyhow::Result<()> {
         .policy("least_time", apigate::Policy::least_time())
         // RoundRobin: циклический перебор
         .policy("round_robin", apigate::Policy::round_robin())
-        .mount(sales::routes())
         .build()?;
 
     print!(

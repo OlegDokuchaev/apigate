@@ -103,11 +103,10 @@ async fn main() -> anyhow::Result<()> {
     let listen: SocketAddr = "127.0.0.1:8080".parse()?;
 
     let app = apigate::App::builder()
-        .backend("sales", ["http://127.0.0.1:8081"])
+        .mount_service(sales::routes(), ["http://127.0.0.1:8081"])
         .state(AppConfig {
             api_key: "secret-key".to_string(),
         })
-        .mount(sales::routes())
         .build()?;
 
     print!("\

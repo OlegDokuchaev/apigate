@@ -30,8 +30,7 @@ async fn main() -> anyhow::Result<()> {
     let listen: SocketAddr = "127.0.0.1:8080".parse()?;
 
     let app = apigate::App::builder()
-        .backend("files", ["http://127.0.0.1:8081"])
-        .mount(files::routes())
+        .mount_service(files::routes(), ["http://127.0.0.1:8081"])
         .build()?;
 
     print!("\
