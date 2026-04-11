@@ -32,8 +32,7 @@ async fn main() -> anyhow::Result<()> {
     let app = apigate::App::builder()
         .backend("files", ["http://127.0.0.1:8081"])
         .mount(files::routes())
-        .build()
-        .map_err(anyhow::Error::msg)?;
+        .build()?;
 
     print!("\
 multipart — http://{listen}

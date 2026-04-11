@@ -108,8 +108,7 @@ async fn main() -> anyhow::Result<()> {
             api_key: "secret-key".to_string(),
         })
         .mount(sales::routes())
-        .build()
-        .map_err(anyhow::Error::msg)?;
+        .build()?;
 
     print!("\
 hooks — http://{listen}

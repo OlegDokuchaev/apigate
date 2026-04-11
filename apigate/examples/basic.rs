@@ -29,8 +29,7 @@ async fn main() -> anyhow::Result<()> {
     let app = apigate::App::builder()
         .backend("sales", ["http://127.0.0.1:8081"])
         .mount(sales::routes())
-        .build()
-        .map_err(anyhow::Error::msg)?;
+        .build()?;
 
     print!(
         "\

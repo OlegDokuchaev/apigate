@@ -37,7 +37,7 @@ struct UpdateSaleService {
 #[apigate::hook]
 async fn log_sale_access(path: &SaleIdPath, ctx: &mut apigate::PartsCtx) -> apigate::HookResult {
     println!("[hook] sale id={}", path.id);
-    ctx.set_header("x-sale-id", &path.id.to_string())?;
+    ctx.set_header("x-sale-id", path.id.to_string())?;
     Ok(())
 }
 
@@ -85,8 +85,7 @@ async fn main() -> anyhow::Result<()> {
     let app = apigate::App::builder()
         .backend("sales", ["http://127.0.0.1:8081"])
         .mount(sales::routes())
-        .build()
-        .map_err(anyhow::Error::msg)?;
+        .build()?;
 
     print!("\
 path — http://{listen}

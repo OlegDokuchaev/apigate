@@ -53,8 +53,7 @@ async fn main() -> anyhow::Result<()> {
         // RoundRobin: циклический перебор
         .policy("round_robin", apigate::Policy::round_robin())
         .mount(sales::routes())
-        .build()
-        .map_err(anyhow::Error::msg)?;
+        .build()?;
 
     print!(
         "\
