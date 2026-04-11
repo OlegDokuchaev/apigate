@@ -1,3 +1,5 @@
+extern crate core;
+
 mod codegen;
 mod expand;
 mod parse;

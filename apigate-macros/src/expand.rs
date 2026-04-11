@@ -221,8 +221,8 @@ fn validate_plans(plans: &[ParamPlan], sig: &syn::Signature, macro_name: &str) -
 
 fn missing_from_scope_tokens(apigate: &TokenStream2, ty: &Type) -> TokenStream2 {
     quote! {
-        #apigate::ApigateError::internal(
-            concat!("missing ", stringify!(#ty), " in request scope")
+        #apigate::ApigateError::from(
+            #apigate::ApigatePipelineError::MissingFromScope(stringify!(#ty))
         )
     }
 }

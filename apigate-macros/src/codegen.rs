@@ -111,7 +111,7 @@ fn build_body_phase(
 fn take_body_expr(apigate_path: &TokenStream2) -> TokenStream2 {
     quote! {
         scope.take_body()
-            .ok_or_else(|| #apigate_path::ApigateError::internal("request body already consumed"))
+            .ok_or_else(|| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::RequestBodyAlreadyConsumed))
     }
 }
 
@@ -129,7 +129,7 @@ fn read_body_bytes(apigate_path: &TokenStream2) -> TokenStream2 {
         let limit = scope.body_limit();
         let bytes = #apigate_path::__private::axum::body::to_bytes(body, limit)
             .await
-            .map_err(|_| #apigate_path::ApigateError::payload_too_large("request body is too large"))?;
+            .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::RequestBodyTooLarge(err.to_string())))?;
     }
 }
 
@@ -144,10 +144,10 @@ fn json_phase(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) -> 
         Some(map_fn) => quote! {
             #read
             let input: #ty = #apigate_path::__private::serde_json::from_slice(&bytes)
-                .map_err(|_| #apigate_path::ApigateError::bad_request("invalid json body"))?;
+                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidJsonBody(err.to_string())))?;
             let output = #map_fn(input, &mut ctx, &mut scope).await?;
             let new_body = #apigate_path::__private::serde_json::to_vec(&output)
-                .map_err(|_| #apigate_path::ApigateError::internal("failed to serialize mapped json"))?;
+                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::FailedSerializeMappedJson(err.to_string())))?;
             ctx.headers_mut().insert(
                 #apigate_path::__private::http::header::CONTENT_TYPE,
                 #apigate_path::__private::http::HeaderValue::from_static("application/json"),
@@ -158,7 +158,7 @@ fn json_phase(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) -> 
         None => quote! {
             #read
             let _: #ty = #apigate_path::__private::serde_json::from_slice(&bytes)
-                .map_err(|_| #apigate_path::ApigateError::bad_request("invalid json body"))?;
+                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidJsonBody(err.to_string())))?;
             Ok(#apigate_path::__private::axum::body::Body::from(bytes))
         },
     }
@@ -174,11 +174,11 @@ fn query_phase(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) ->
     match map_fn {
         Some(map_fn) => quote! {
             let input: #ty = #apigate_path::__private::axum::extract::Query::<#ty>::try_from_uri(ctx.uri())
-                .map_err(|_| #apigate_path::ApigateError::bad_request("invalid query"))?
+                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidQuery(err.to_string())))?
                 .0;
             let output = #map_fn(input, &mut ctx, &mut scope).await?;
             let encoded = #apigate_path::__private::serde_urlencoded::to_string(&output)
-                .map_err(|_| #apigate_path::ApigateError::internal("failed to serialize mapped query"))?;
+                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::FailedSerializeMappedQuery(err.to_string())))?;
             let path = ctx.uri().path().to_string();
             let mut path_and_query = path;
             if !encoded.is_empty() {
@@ -188,12 +188,12 @@ fn query_phase(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) ->
             *ctx.uri_mut() = #apigate_path::__private::http::Uri::builder()
                 .path_and_query(path_and_query)
                 .build()
-                .map_err(|_| #apigate_path::ApigateError::internal("failed to rebuild uri"))?;
+                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::FailedRebuildUri(err.to_string())))?;
             #take
         },
         None => quote! {
             let _: #ty = #apigate_path::__private::axum::extract::Query::<#ty>::try_from_uri(ctx.uri())
-                .map_err(|_| #apigate_path::ApigateError::bad_request("invalid query"))?
+                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidQuery(err.to_string())))?
                 .0;
             #take
         },
@@ -223,9 +223,7 @@ fn form_phase(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) -> 
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or_default();
             if !content_type.starts_with("application/x-www-form-urlencoded") {
-                return Err(#apigate_path::ApigateError::unsupported_media_type(
-                    "expected application/x-www-form-urlencoded",
-                ));
+                return Err(#apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::ExpectedFormUrlEncoded));
             }
             #post_branch
         }
@@ -242,10 +240,10 @@ fn form_get_branch(
         Some(map_fn) => quote! {
             let raw = ctx.uri().query().unwrap_or_default();
             let input: #ty = #apigate_path::__private::serde_urlencoded::from_str(raw)
-                .map_err(|_| #apigate_path::ApigateError::bad_request("invalid form query"))?;
+                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidFormQuery(err.to_string())))?;
             let output = #map_fn(input, &mut ctx, &mut scope).await?;
             let encoded = #apigate_path::__private::serde_urlencoded::to_string(&output)
-                .map_err(|_| #apigate_path::ApigateError::internal("failed to serialize mapped form"))?;
+                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::FailedSerializeMappedForm(err.to_string())))?;
             let path = ctx.uri().path().to_string();
             let mut path_and_query = path;
             if !encoded.is_empty() {
@@ -255,13 +253,13 @@ fn form_get_branch(
             *ctx.uri_mut() = #apigate_path::__private::http::Uri::builder()
                 .path_and_query(path_and_query)
                 .build()
-                .map_err(|_| #apigate_path::ApigateError::internal("failed to rebuild uri"))?;
+                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::FailedRebuildUri(err.to_string())))?;
             #take
         },
         None => quote! {
             let raw = ctx.uri().query().unwrap_or_default();
             let _: #ty = #apigate_path::__private::serde_urlencoded::from_str(raw)
-                .map_err(|_| #apigate_path::ApigateError::bad_request("invalid form query"))?;
+                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidFormQuery(err.to_string())))?;
             #take
         },
     }
@@ -274,10 +272,10 @@ fn form_post_branch(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path
         Some(map_fn) => quote! {
             #read
             let input: #ty = #apigate_path::__private::serde_urlencoded::from_bytes(&bytes)
-                .map_err(|_| #apigate_path::ApigateError::bad_request("invalid form body"))?;
+                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidFormBody(err.to_string())))?;
             let output = #map_fn(input, &mut ctx, &mut scope).await?;
             let encoded = #apigate_path::__private::serde_urlencoded::to_string(&output)
-                .map_err(|_| #apigate_path::ApigateError::internal("failed to serialize mapped form"))?;
+                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::FailedSerializeMappedForm(err.to_string())))?;
             ctx.headers_mut().insert(
                 #apigate_path::__private::http::header::CONTENT_TYPE,
                 #apigate_path::__private::http::HeaderValue::from_static("application/x-www-form-urlencoded"),
@@ -288,7 +286,7 @@ fn form_post_branch(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path
         None => quote! {
             #read
             let _: #ty = #apigate_path::__private::serde_urlencoded::from_bytes(&bytes)
-                .map_err(|_| #apigate_path::ApigateError::bad_request("invalid form body"))?;
+                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidFormBody(err.to_string())))?;
             Ok(#apigate_path::__private::axum::body::Body::from(bytes))
         },
     }

@@ -1,11 +1,32 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
+use thiserror::Error;
 
 /// Token arrays ready to be emitted into a `RewriteTemplate`.
 pub(crate) struct CompiledTemplate {
     pub src_tokens: Vec<TokenStream2>,
     pub dst_tokens: Vec<TokenStream2>,
     pub static_len: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub(crate) enum RewriteTemplateError {
+    #[error("empty parameter `{{}}` in route path")]
+    EmptyRouteParameter,
+    #[error("duplicate parameter `{name}` in route path")]
+    DuplicateRouteParameter { name: String },
+    #[error("unclosed `{{` in `to`")]
+    UnclosedToParameter,
+    #[error("empty parameter `{{}}` in `to`")]
+    EmptyToParameter,
+    #[error("parameter `{name}` in `to` not found in route path")]
+    UnknownToParameter { name: String },
+    #[error("unmatched `}}` in `to`")]
+    UnmatchedToCloseBrace,
+    #[error("too many path parameters in route path (max {max})")]
+    TooManyRouteParameters { max: usize },
+    #[error("rewrite capture index overflow")]
+    CaptureIndexOverflow,
 }
 
 // ---------------------------------------------------------------------------
@@ -40,7 +61,7 @@ pub(crate) fn compile_rewrite_template(
     apigate_path: &TokenStream2,
     route_path: &str,
     to: &str,
-) -> Result<CompiledTemplate, String> {
+) -> Result<CompiledTemplate, RewriteTemplateError> {
     let (src, params) = parse_route_source(route_path)?;
     let (dst, static_len) = parse_rewrite_target(to, &params)?;
 
@@ -59,7 +80,11 @@ pub(crate) fn compile_rewrite_template(
 // ---------------------------------------------------------------------------
 
 /// Parses the source route path into IR segments and a list of parameter names.
-fn parse_route_source(route_path: &str) -> Result<(Vec<SrcSegIr>, Vec<String>), String> {
+fn parse_route_source(
+    route_path: &str,
+) -> Result<(Vec<SrcSegIr>, Vec<String>), RewriteTemplateError> {
+    const MAX_CAPTURE_PARAMS: usize = u8::MAX as usize + 1;
+
     let mut src = Vec::new();
     let mut params = Vec::new();
 
@@ -67,10 +92,17 @@ fn parse_route_source(route_path: &str) -> Result<(Vec<SrcSegIr>, Vec<String>), 
         if seg.starts_with('{') && seg.ends_with('}') {
             let name = &seg[1..seg.len() - 1];
             if name.is_empty() {
-                return Err("empty parameter `{}` in route path".to_string());
+                return Err(RewriteTemplateError::EmptyRouteParameter);
             }
             if params.iter().any(|p| p == name) {
-                return Err(format!("duplicate parameter `{name}` in route path"));
+                return Err(RewriteTemplateError::DuplicateRouteParameter {
+                    name: name.to_owned(),
+                });
+            }
+            if params.len() >= MAX_CAPTURE_PARAMS {
+                return Err(RewriteTemplateError::TooManyRouteParameters {
+                    max: MAX_CAPTURE_PARAMS,
+                });
             }
 
             params.push(name.to_owned());
@@ -84,7 +116,10 @@ fn parse_route_source(route_path: &str) -> Result<(Vec<SrcSegIr>, Vec<String>), 
 }
 
 /// Parses the destination template, resolving `{param}` references against known parameters.
-fn parse_rewrite_target(to: &str, params: &[String]) -> Result<(Vec<DstChunkIr>, usize), String> {
+fn parse_rewrite_target(
+    to: &str,
+    params: &[String],
+) -> Result<(Vec<DstChunkIr>, usize), RewriteTemplateError> {
     let mut dst = Vec::new();
     let mut static_len = 0usize;
     let mut lit_start = 0;
@@ -102,24 +137,27 @@ fn parse_rewrite_target(to: &str, params: &[String]) -> Result<(Vec<DstChunkIr>,
 
                 let close = to[i + 1..]
                     .find('}')
-                    .ok_or_else(|| "unclosed `{` in `to`".to_string())?;
+                    .ok_or(RewriteTemplateError::UnclosedToParameter)?;
 
                 let name = &to[i + 1..i + 1 + close];
                 if name.is_empty() {
-                    return Err("empty parameter `{}` in `to`".to_string());
+                    return Err(RewriteTemplateError::EmptyToParameter);
                 }
 
-                let src_index = params
-                    .iter()
-                    .position(|p| p == name)
-                    .ok_or_else(|| format!("parameter `{name}` in `to` not found in route path"))?;
+                let src_index = params.iter().position(|p| p == name).ok_or_else(|| {
+                    RewriteTemplateError::UnknownToParameter {
+                        name: name.to_owned(),
+                    }
+                })?;
+                let src_index = u8::try_from(src_index)
+                    .map_err(|_| RewriteTemplateError::CaptureIndexOverflow)?;
 
-                dst.push(DstChunkIr::Capture(src_index as u8));
+                dst.push(DstChunkIr::Capture(src_index));
 
                 i = i + 1 + close + 1;
                 lit_start = i;
             }
-            b'}' => return Err("unmatched `}` in `to`".to_string()),
+            b'}' => return Err(RewriteTemplateError::UnmatchedToCloseBrace),
             _ => i += 1,
         }
     }
