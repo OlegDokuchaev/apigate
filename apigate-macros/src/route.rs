@@ -225,48 +225,43 @@ enum RouteArg {
 }
 
 impl Parse for RouteArg {
-    fn parse(input: ParseStream<'_>) -> Result<Self> {
+    fn parse(input: ParseStream) -> Result<Self> {
         let key: Ident = input.parse()?;
+        let key_str = key.to_string();
 
         if input.peek(Token![=]) {
-            // TODO: Maybe match case?
-            if key == "to" {
-                Ok(Self::To(parse_assigned(input)?))
-            } else if key == "policy" {
-                Ok(Self::Policy(parse_assigned(input)?))
-            } else if key == "before" {
-                input.parse::<Token![=]>()?;
-                Ok(Self::Before(parse_bracketed_paths(input)?))
-            } else if key == "map" {
-                Ok(Self::Map(parse_assigned(input)?))
-            } else if key == "query" {
-                Ok(Self::Query(parse_assigned(input)?))
-            } else if key == "json" {
-                Ok(Self::Json(parse_assigned(input)?))
-            } else if key == "form" {
-                Ok(Self::Form(parse_assigned(input)?))
-            } else if key == "path" {
-                Ok(Self::PathType(parse_assigned(input)?))
-            } else {
-                Err(Error::new(
+            match key_str.as_str() {
+                "to" => Ok(Self::To(parse_assigned(input)?)),
+                "policy" => Ok(Self::Policy(parse_assigned(input)?)),
+                "before" => {
+                    input.parse::<Token![=]>()?;
+                    Ok(Self::Before(parse_bracketed_paths(input)?))
+                }
+                "map" => Ok(Self::Map(parse_assigned(input)?)),
+                "query" => Ok(Self::Query(parse_assigned(input)?)),
+                "json" => Ok(Self::Json(parse_assigned(input)?)),
+                "form" => Ok(Self::Form(parse_assigned(input)?)),
+                "path" => Ok(Self::PathType(parse_assigned(input)?)),
+                _ => Err(Error::new(
                     key.span(),
                     "unknown route argument, expected one of: \
                      `to`, `policy`, `before`, `map`, `query`, `json`, `form`, `path`",
-                ))
+                )),
             }
-        } else if key == "multipart" {
-            Ok(Self::Flag(RouteFlag::Multipart))
         } else {
-            Err(Error::new(
-                key.span(),
-                "expected a route path string literal, `key = value`, or a supported bare flag",
-            ))
+            match key_str.as_str() {
+                "multipart" => Ok(Self::Flag(RouteFlag::Multipart)),
+                _ => Err(Error::new(
+                    key.span(),
+                    "expected `key = value` or a supported bare flag (`multipart`)",
+                )),
+            }
         }
     }
 }
 
 impl Parse for RouteArgs {
-    fn parse(input: ParseStream<'_>) -> Result<Self> {
+    fn parse(input: ParseStream) -> Result<Self> {
         let path: LitStr = input.parse()?;
 
         let mut builder = RouteArgsBuilder::default();
