@@ -21,14 +21,11 @@ impl Parse for ServiceArg {
         let key: Ident = input.parse()?;
         let value: LitStr = parse_assigned(input)?;
 
-        if key == "name" {
-            Ok(Self::Name(value))
-        } else if key == "prefix" {
-            Ok(Self::Prefix(value))
-        } else if key == "policy" {
-            Ok(Self::Policy(value))
-        } else {
-            Err(Error::new(key.span(), format!("unknown argument `{key}`")))
+        match key.to_string().as_str() {
+            "name" => Ok(Self::Name(value)),
+            "prefix" => Ok(Self::Prefix(value)),
+            "policy" => Ok(Self::Policy(value)),
+            _ => Err(Error::new(key.span(), format!("unknown argument `{key}`"))),
         }
     }
 }
