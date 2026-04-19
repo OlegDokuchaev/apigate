@@ -1,3 +1,9 @@
+//! Procedural macros for `apigate`.
+//!
+//! This crate is normally used through the `apigate` facade crate and provides:
+//! service modules, route attributes, request hooks, and request maps.
+#![warn(missing_docs)]
+
 extern crate core;
 
 mod codegen;
@@ -16,6 +22,19 @@ use expand::expand_fn_params;
 use route::expand_route_from_fn;
 use service::ServiceArgs;
 
+/// Defines an apigate service module.
+///
+/// The macro scans route attributes inside the inline module, generates a
+/// static route table, and injects a `routes()` function returning
+/// `apigate::Routes`.
+///
+/// Supported module arguments:
+/// - `name = "service_name"`: overrides the module name as service name.
+/// - `prefix = "/path"`: mounts all routes under the prefix.
+/// - `policy = "policy_name"`: applies a named policy to all routes.
+///
+/// Route attributes such as `#[apigate::get(...)]` must be used inside this
+/// module.
 #[proc_macro_attribute]
 pub fn service(args: TokenStream, input: TokenStream) -> TokenStream {
     expand_service(args, input)
@@ -88,6 +107,15 @@ fn expand_service(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     Ok(quote!(#module))
 }
 
+/// Marks an async function as a request hook.
+///
+/// Hooks can inspect and mutate request parts through `PartsCtx`, use
+/// `RequestScope` for shared/per-request state, and return
+/// `apigate::HookResult`.
+///
+/// The generated wrapper normalizes supported parameters into
+/// `(&mut PartsCtx, &mut RequestScope)` so route pipelines can call hooks
+/// cheaply.
 #[proc_macro_attribute]
 pub fn hook(_args: TokenStream, input: TokenStream) -> TokenStream {
     expand_fn_params(input, "hook", false)
@@ -95,6 +123,12 @@ pub fn hook(_args: TokenStream, input: TokenStream) -> TokenStream {
         .into()
 }
 
+/// Marks an async function as a request mapper.
+///
+/// Maps transform typed `query`, `json`, or `form` inputs into a new serialized
+/// upstream request payload or query string. The first owned parameter is kept
+/// as the typed map input; other supported parameters are extracted from
+/// `RequestScope` or request parts.
 #[proc_macro_attribute]
 pub fn map(_args: TokenStream, input: TokenStream) -> TokenStream {
     expand_fn_params(input, "map", true)
@@ -118,6 +152,10 @@ pub(crate) fn apigate_crate_path() -> Result<TokenStream2, syn::Error> {
 
 macro_rules! route_stub {
     ($name:ident) => {
+        /// Declares a route inside an `#[apigate::service]` module.
+        ///
+        /// This attribute is only expanded by `#[apigate::service]`; using it
+        /// directly outside a service module produces a compile error.
         #[proc_macro_attribute]
         pub fn $name(_args: TokenStream, input: TokenStream) -> TokenStream {
             let item = parse_macro_input!(input as syn::Item);
