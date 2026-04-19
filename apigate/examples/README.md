@@ -5,6 +5,8 @@
 | `basic` | Passthrough, static rewrite (`to`), rewrite-шаблон (`{id}`) |
 | `hooks` | Shared state в хуке, auth, инъекция заголовков, цепочка хуков, per-request data через scope |
 | `errors` | Глобальный JSON error renderer, `user_message`/`debug_details`, кастомный JSON из hook |
+| `logging` | `tracing` + `runtime_observer`, кастомизация runtime-событий apigate |
+| `tower_logging` | Внешний `tower_http::TraceLayer` через `.with_router(...)` |
 | `path` | Валидация path (UUID), доступ к path в хуке (`&T`), доступ к path в map |
 | `map` | Преобразование query, json (+ shared state), form |
 | `policy` | HeaderSticky + ConsistentHash, LeastRequest, LeastTime, RoundRobin |
@@ -20,6 +22,8 @@ caddy run --config apigate/examples/upstream/Caddyfile
 cargo run --example basic
 cargo run --example hooks
 cargo run --example errors
+cargo run --example logging
+cargo run --example tower_logging
 cargo run --example path
 cargo run --example map
 cargo run --example policy
