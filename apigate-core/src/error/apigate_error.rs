@@ -106,6 +106,20 @@ impl ApigateError {
         Self::json(StatusCode::FORBIDDEN, body)
     }
 
+    pub(crate) fn framework_error(&self) -> Option<&ApigateFrameworkError> {
+        match &self.repr {
+            ApigateErrorRepr::Framework(error) => Some(error),
+            ApigateErrorRepr::Custom(_) => None,
+        }
+    }
+
+    pub(crate) fn status_code_for_log(&self) -> StatusCode {
+        match &self.repr {
+            ApigateErrorRepr::Framework(error) => error.status_code(),
+            ApigateErrorRepr::Custom(response) => response.status(),
+        }
+    }
+
     pub(crate) fn into_response_with(self, renderer: &ErrorRenderer) -> Response {
         match self.repr {
             ApigateErrorRepr::Framework(error) => renderer(error),

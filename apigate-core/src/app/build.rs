@@ -1,54 +1,23 @@
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use axum::body::Body;
-use axum::extract::{Request as AxumRequest, State};
 use axum::routing;
 use axum::{Extension, Router};
-
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioTimer};
 
+use super::dispatch::proxy_handler;
+use super::{App, AppBuilder, Inner};
 use crate::backend::{BackendPool, BaseUri};
-use crate::balancing::{BalanceCtx, ProxyErrorKind, ResultEvent, RoundRobin, StartEvent};
-use crate::error::{
-    ApigateBuildError, ApigateCoreError, ApigateFrameworkError, ErrorRenderer,
-    default_error_renderer,
-};
+use crate::balancing::RoundRobin;
+use crate::error::{ApigateBuildError, ApigateFrameworkError, default_error_renderer};
+use crate::observability::{RuntimeEvent, default_tracing_observer};
 use crate::policy::Policy;
-use crate::proxy::proxy_request;
 use crate::route::{FixedRewrite, Rewrite, RewriteSpec, RouteMeta};
-use crate::routing::{NoRouteKey, RouteCtx};
-use crate::{ApigateError, Method, PartsCtx, RequestScope, Routes};
-
-struct Inner {
-    client: Client<HttpConnector, Body>,
-    state: http::Extensions,
-    map_body_limit: usize,
-    request_timeout: Duration,
-    route_metas: Box<[RouteMeta]>,
-    error_renderer: Arc<ErrorRenderer>,
-}
-
-pub struct App {
-    router: Router,
-}
-
-pub struct AppBuilder {
-    backends: HashMap<String, Vec<String>>,
-    mounted: Vec<Routes>,
-    policies: HashMap<String, Arc<Policy>>,
-    default_policy: Arc<Policy>,
-    request_timeout: Duration,
-    connect_timeout: Duration,
-    pool_idle_timeout: Duration,
-    map_body_limit: usize,
-    state: http::Extensions,
-    error_renderer: Arc<ErrorRenderer>,
-}
+use crate::routing::NoRouteKey;
+use crate::{Method, Routes};
 
 impl AppBuilder {
     pub fn new() -> Self {
@@ -63,6 +32,7 @@ impl AppBuilder {
             map_body_limit: 2 * 1024 * 1024,
             state: http::Extensions::new(),
             error_renderer: Arc::new(default_error_renderer),
+            runtime_observer: None,
         }
     }
 
@@ -122,6 +92,30 @@ impl AppBuilder {
         F: Fn(ApigateFrameworkError) -> axum::response::Response + Send + Sync + 'static,
     {
         self.error_renderer = Arc::new(renderer);
+        self
+    }
+
+    /// Enables built-in structured runtime events through `tracing`.
+    pub fn enable_default_tracing(mut self) -> Self {
+        self.runtime_observer = Some(Arc::new(default_tracing_observer));
+        self
+    }
+
+    /// Disables runtime observer events.
+    ///
+    /// This is the lowest-overhead mode: request handling only performs a cheap
+    /// `Option::is_some` check and does not call an observer.
+    pub fn disable_runtime_observer(mut self) -> Self {
+        self.runtime_observer = None;
+        self
+    }
+
+    /// Sets observer for structured runtime events.
+    pub fn runtime_observer<F>(mut self, observer: F) -> Self
+    where
+        F: for<'a> Fn(RuntimeEvent<'a>) + Send + Sync + 'static,
+    {
+        self.runtime_observer = Some(Arc::new(observer));
         self
     }
 
@@ -208,30 +202,13 @@ impl AppBuilder {
             map_body_limit: self.map_body_limit,
             route_metas: route_metas.into_boxed_slice(),
             error_renderer: self.error_renderer,
+            runtime_observer: self.runtime_observer,
         });
 
         let router = router.with_state(inner);
 
         Ok(App { router })
     }
-}
-
-impl Default for AppBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl App {
-    pub fn builder() -> AppBuilder {
-        AppBuilder::new()
-    }
-}
-
-pub async fn run(addr: SocketAddr, app: App) -> std::io::Result<()> {
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    // axum::serve intentionally simple (и это нам подходит как внутренняя обертка)
-    axum::serve(listener, app.router).await
 }
 
 fn mount_routes(
@@ -315,114 +292,5 @@ fn method_router(method: Method) -> routing::MethodRouter<Arc<Inner>> {
         Method::Patch => routing::patch(proxy_handler),
         Method::Head => routing::head(proxy_handler),
         Method::Options => routing::options(proxy_handler),
-    }
-}
-
-async fn proxy_handler(
-    State(inner): State<Arc<Inner>>,
-    Extension(route_idx): Extension<usize>,
-    req: AxumRequest,
-) -> axum::response::Response {
-    let meta = &inner.route_metas[route_idx];
-    let pool = &meta.pool;
-    let (mut parts, body) = req.into_parts();
-
-    // Pipeline: before hooks + body validation/map in a single pass
-    let body = if let Some(pipeline) = meta.pipeline {
-        let ctx = PartsCtx::new(meta.service, meta.route_path, &mut parts);
-        let scope = RequestScope::new(&inner.state, body, inner.map_body_limit);
-
-        match pipeline(ctx, scope).await {
-            Ok(body) => body,
-            Err(err) => return err.into_response_with(inner.error_renderer.as_ref()),
-        }
-    } else {
-        body
-    };
-
-    // Routing
-    let route_ctx = RouteCtx {
-        service: meta.service,
-        prefix: meta.prefix,
-        route_path: meta.route_path,
-        method: &parts.method,
-        uri: &parts.uri,
-        headers: &parts.headers,
-    };
-    let routing = meta.policy.router.route(&route_ctx, pool);
-
-    // Balancer
-    let balance_ctx = BalanceCtx {
-        service: meta.service,
-        affinity: routing.affinity.as_ref(),
-        pool,
-        candidates: routing.candidates,
-    };
-    let Some(backend_index) = meta.policy.balancer.pick(&balance_ctx) else {
-        return ApigateError::from(ApigateCoreError::NoBackendsSelectedByBalancer)
-            .into_response_with(inner.error_renderer.as_ref());
-    };
-    let Some(backend) = pool.get(backend_index) else {
-        return ApigateError::from(ApigateCoreError::InvalidBackendIndex)
-            .into_response_with(inner.error_renderer.as_ref());
-    };
-
-    // Make request
-    meta.policy.balancer.on_start(&StartEvent {
-        service: meta.service,
-        backend_index,
-    });
-
-    let started_at = Instant::now();
-
-    let result = tokio::time::timeout(
-        inner.request_timeout,
-        proxy_request(backend, &inner.client, meta, parts, body),
-    )
-    .await
-    .unwrap_or_else(|_| Err(ProxyErrorKind::Timeout));
-
-    match result {
-        Ok(response) => {
-            let elapsed = started_at.elapsed();
-
-            meta.policy.balancer.on_result(&ResultEvent {
-                service: meta.service,
-                backend_index,
-                status: Some(response.status()),
-                error: None,
-                head_latency: elapsed,
-            });
-
-            response
-        }
-        Err(error) => {
-            let elapsed = started_at.elapsed();
-
-            meta.policy.balancer.on_result(&ResultEvent {
-                service: meta.service,
-                backend_index,
-                status: None,
-                error: Some(error),
-                head_latency: elapsed,
-            });
-
-            match error {
-                ProxyErrorKind::NoBackends => ApigateError::from(ApigateCoreError::NoBackends)
-                    .into_response_with(inner.error_renderer.as_ref()),
-                ProxyErrorKind::InvalidUpstreamUri => {
-                    ApigateError::from(ApigateCoreError::InvalidUpstreamUri)
-                        .into_response_with(inner.error_renderer.as_ref())
-                }
-                ProxyErrorKind::UpstreamRequest => {
-                    ApigateError::from(ApigateCoreError::UpstreamRequestFailed)
-                        .into_response_with(inner.error_renderer.as_ref())
-                }
-                ProxyErrorKind::Timeout => {
-                    ApigateError::from(ApigateCoreError::UpstreamRequestTimedOut)
-                        .into_response_with(inner.error_renderer.as_ref())
-                }
-            }
-        }
     }
 }
