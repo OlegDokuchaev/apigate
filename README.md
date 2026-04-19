@@ -22,6 +22,12 @@ async fn main() -> anyhow::Result<()> {
         .connect_timeout(std::time::Duration::from_secs(3))
         .pool_idle_timeout(std::time::Duration::from_secs(60))
         .policy("sales_default", apigate::Policy::header_sticky("x-user-id"))
+        // optional: emit built-in runtime events through tracing
+        // .enable_default_tracing()
+        // optional: set custom runtime observer for logs/metrics/audit
+        // .runtime_observer(my_runtime_observer)
+        // optional: add external tower/axum layers
+        // .with_router(|r| r.layer(tower_http::trace::TraceLayer::new_for_http()))
         .build()?;
 
     apigate::run(cfg.listen, app).await
@@ -173,12 +179,7 @@ async fn buy() {}
 (он применяется и к pipeline, и к proxy/runtime ошибкам вроде 502/504):
 
 ```rust
-use axum::response::IntoResponse;
-use http::StatusCode;
-
 fn render_error(err: apigate::ApigateFrameworkError) -> axum::response::Response {
-    use apigate::{ApigateFrameworkError, ApigatePipelineError};
-
     match &err {
         ApigateFrameworkError::Pipeline(ApigatePipelineError::InvalidJsonBody(details)) => {
             eprintln!("[apigate][invalid_json_body] details={details}");
@@ -282,6 +283,133 @@ return Err(apigate::ApigateError::unauthorized_json(&ErrBody {
 - `ApigateError::bad_request_json(...)`
 - `ApigateError::unauthorized_json(...)`
 - `ApigateError::forbidden_json(...)`
+
+---
+
+## Runtime observability (`tracing`)
+
+По умолчанию runtime observer apigate **выключен** (минимальный overhead в hot path).
+
+Если нужно эмитить built-in runtime events через `tracing`:
+
+```rust
+let app = apigate::App::builder()
+    .mount_service(sales::routes(), ["http://127.0.0.1:8081"])
+    .enable_default_tracing()
+    .build()?;
+```
+
+Observer можно явно выключить после условной конфигурации:
+
+```rust
+let app = apigate::App::builder()
+    .mount_service(sales::routes(), ["http://127.0.0.1:8081"])
+    .disable_runtime_observer()
+    .build()?;
+```
+
+`enable_default_tracing()` эмитит структурированные runtime-события:
+- старт запроса
+- выбор backend
+- ошибки pipeline / dispatch
+- успех/ошибка upstream с latency
+
+Ожидаемые клиентские ошибки (`4xx`) в default tracing observer пишутся на `info`, внутренние/серверные (`5xx`) — на `warn`.
+Обычные успешные события (`request started`, `backend selected`, `upstream succeeded`) пишутся на `debug`.
+
+Настройка уровней и формата выполняется в приложении через `tracing-subscriber`:
+
+```rust
+use tracing_subscriber::{EnvFilter, fmt};
+
+fn init_tracing() {
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,apigate=debug"));
+
+    fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .compact()
+        .init();
+}
+```
+
+Полный контроль (аналогично `error_renderer`) через `.runtime_observer(...)`:
+
+```rust
+fn observe(event: apigate::RuntimeEvent<'_>) {
+    use apigate::RuntimeEventKind;
+
+    match event.kind {
+        RuntimeEventKind::PipelineFailedFramework { error } => {
+            tracing::warn!(
+                target: "app::gateway",
+                service = event.service,
+                route = event.route_path,
+                code = error.code(),
+                status = error.status_code().as_u16(),
+                details = ?error.debug_details(),
+                "pipeline failed"
+            );
+        }
+        RuntimeEventKind::UpstreamFailed {
+            backend_index,
+            error,
+            upstream_latency,
+        } => {
+            tracing::warn!(
+                target: "app::gateway",
+                service = event.service,
+                route = event.route_path,
+                backend_index,
+                error = ?error,
+                latency = ?upstream_latency,
+                "upstream failed"
+            );
+        }
+        _ => {}
+    }
+}
+
+let app = apigate::App::builder()
+    .mount_service(sales::routes(), ["http://127.0.0.1:8081"])
+    .runtime_observer(observe)
+    .build()?;
+```
+
+Для outer middleware (`tower-http::TraceLayer`, CORS, compression, timeout и т.д.)
+используй API на уровне роутера:
+
+```rust
+use tower_http::trace::TraceLayer;
+
+let app = apigate::App::builder()
+    .mount_service(sales::routes(), ["http://127.0.0.1:8081"])
+    .build()?
+    .with_router(|r| r.layer(TraceLayer::new_for_http()));
+
+apigate::run(listen, app).await?;
+```
+
+Если нужен полный manual-контроль, можно забрать роутер:
+
+```rust
+let router = apigate::App::builder()
+    .mount_service(sales::routes(), ["http://127.0.0.1:8081"])
+    .build()?
+    .into_router();
+
+let router = router.layer(TraceLayer::new_for_http());
+apigate::run_router(listen, router).await?;
+```
+
+`hyper-util` тоже имеет внутренние transport/pool/connect логи. Их лучше включать только для диагностики:
+
+```sh
+RUST_LOG=info,apigate=debug,hyper_util::client::legacy=debug cargo run --example logging
+```
+
+Внутренний tracing самого `hyper` в 1.x нестабилен и требует отдельные feature/cfg flags, поэтому apigate не включает его по умолчанию.
 
 ---
 
