@@ -5,17 +5,17 @@ use http::uri::{Authority, Scheme};
 use crate::error::BaseUriParseError;
 
 #[derive(Clone, Debug)]
-pub struct BaseUri {
-    pub scheme: Scheme,
-    pub authority: Authority,
+pub(crate) struct BaseUri {
+    pub(crate) scheme: Scheme,
+    pub(crate) authority: Authority,
     /// Pre-computed `"{scheme}://{authority}"` for fast URI building.
-    pub prefix: String,
+    pub(crate) prefix: String,
     /// Pre-computed Host header value.
-    pub host_header: HeaderValue,
+    pub(crate) host_header: HeaderValue,
 }
 
 impl BaseUri {
-    pub fn parse(s: &str) -> Result<Self, BaseUriParseError> {
+    pub(crate) fn parse(s: &str) -> Result<Self, BaseUriParseError> {
         let uri: Uri = s.parse().map_err(|source| BaseUriParseError::InvalidUri {
             input: s.to_owned(),
             source,
@@ -50,24 +50,33 @@ impl BaseUri {
     }
 }
 
+/// A configured upstream backend.
+///
+/// Backends are created from URLs registered on [`crate::AppBuilder`].
 #[derive(Clone, Debug)]
 pub struct Backend {
-    pub base: BaseUri,
+    pub(crate) base: BaseUri,
 }
 
 impl Backend {
-    pub fn new(base: BaseUri) -> Self {
+    pub(crate) fn new(base: BaseUri) -> Self {
         Self { base }
+    }
+
+    /// Returns the upstream URI prefix, for example `http://127.0.0.1:8081`.
+    pub fn uri_prefix(&self) -> &str {
+        &self.base.prefix
     }
 }
 
+/// Immutable collection of upstream backends for one service.
 #[derive(Debug)]
 pub struct BackendPool {
     backends: Box<[Backend]>,
 }
 
 impl BackendPool {
-    pub fn new(bases: Vec<BaseUri>) -> Self {
+    pub(crate) fn new(bases: Vec<BaseUri>) -> Self {
         let backends = bases
             .into_iter()
             .map(Backend::new)
@@ -77,18 +86,22 @@ impl BackendPool {
         Self { backends }
     }
 
+    /// Returns whether the pool has no backends.
     pub fn is_empty(&self) -> bool {
         self.backends.is_empty()
     }
 
+    /// Returns the number of backends in the pool.
     pub fn len(&self) -> usize {
         self.backends.len()
     }
 
+    /// Returns a backend by stable pool index.
     pub fn get(&self, index: usize) -> Option<&Backend> {
         self.backends.get(index)
     }
 
+    /// Returns all configured backends.
     pub fn backends(&self) -> &[Backend] {
         &self.backends
     }

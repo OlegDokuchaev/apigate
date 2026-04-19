@@ -6,20 +6,27 @@ use thiserror::Error;
 
 use super::{ApigateCoreError, ApigatePipelineError};
 
+/// Framework-owned error passed to the configured error renderer.
 #[derive(Debug, Error)]
 pub enum ApigateFrameworkError {
+    /// Core runtime error.
     #[error(transparent)]
     Core(#[from] ApigateCoreError),
+    /// Pipeline extraction, validation, or serialization error.
     #[error(transparent)]
     Pipeline(#[from] ApigatePipelineError),
+    /// User-created framework-rendered HTTP error.
     #[error("{message}")]
     Http {
+        /// HTTP status returned by the default renderer.
         status: StatusCode,
+        /// User-facing error message.
         message: Cow<'static, str>,
     },
 }
 
 impl ApigateFrameworkError {
+    /// Returns a user-facing message safe for default HTTP responses.
     pub fn user_message(&self) -> &str {
         match self {
             Self::Core(err) => err.user_message(),
@@ -28,6 +35,7 @@ impl ApigateFrameworkError {
         }
     }
 
+    /// Returns diagnostic details intended for logs, not default responses.
     pub fn debug_details(&self) -> Option<&str> {
         match self {
             Self::Core(err) => err.debug_details(),
@@ -36,6 +44,7 @@ impl ApigateFrameworkError {
         }
     }
 
+    /// Returns the default HTTP status for this error.
     pub fn status_code(&self) -> StatusCode {
         match self {
             Self::Core(err) => err.status_code(),
@@ -44,6 +53,7 @@ impl ApigateFrameworkError {
         }
     }
 
+    /// Returns a stable machine-readable error code.
     pub fn code(&self) -> &'static str {
         match self {
             Self::Core(err) => err.code(),
@@ -65,8 +75,10 @@ impl ApigateFrameworkError {
     }
 }
 
+/// Function type used to render framework errors into HTTP responses.
 pub type ErrorRenderer = dyn Fn(ApigateFrameworkError) -> Response + Send + Sync + 'static;
 
+/// Default error renderer that returns plain-text responses.
 pub fn default_error_renderer(error: ApigateFrameworkError) -> Response {
     (
         error.status_code(),

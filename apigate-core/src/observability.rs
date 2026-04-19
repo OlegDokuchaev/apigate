@@ -9,8 +9,11 @@ use crate::error::ApigateFrameworkError;
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
 pub struct RuntimeEvent<'a> {
+    /// Logical service name.
     pub service: &'static str,
+    /// Route path relative to the service prefix.
     pub route_path: &'static str,
+    /// Event-specific payload.
     pub kind: RuntimeEventKind<'a>,
 }
 
@@ -18,31 +21,51 @@ pub struct RuntimeEvent<'a> {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
 pub enum RuntimeEventKind<'a> {
+    /// Request entered the gateway handler.
     RequestStart {
+        /// Incoming request method.
         method: &'a Method,
+        /// Incoming request URI.
         uri: &'a Uri,
+        /// Whether this route has a generated pipeline.
         has_pipeline: bool,
     },
+    /// Generated pipeline failed with a framework-rendered error.
     PipelineFailedFramework {
+        /// Framework error returned by the pipeline.
         error: &'a ApigateFrameworkError,
     },
+    /// Generated pipeline returned a custom HTTP response.
     PipelineFailedCustom {
+        /// Response status.
         status: StatusCode,
     },
+    /// Backend selection or request dispatch failed before upstream I/O.
     DispatchFailed {
+        /// Framework error describing the dispatch failure.
         error: &'a ApigateFrameworkError,
     },
+    /// A backend was selected for the request.
     BackendSelected {
+        /// Selected backend index.
         backend_index: usize,
     },
+    /// Upstream returned a response.
     UpstreamSucceeded {
+        /// Selected backend index.
         backend_index: usize,
+        /// Upstream response status.
         status: StatusCode,
+        /// Time from upstream dispatch to response head.
         upstream_latency: Duration,
     },
+    /// Upstream request failed before receiving a response.
     UpstreamFailed {
+        /// Selected backend index.
         backend_index: usize,
+        /// Proxy error kind.
         error: ProxyErrorKind,
+        /// Time from upstream dispatch to failure.
         upstream_latency: Duration,
     },
 }
@@ -51,7 +74,7 @@ pub enum RuntimeEventKind<'a> {
 pub type RuntimeObserver = dyn for<'a> Fn(RuntimeEvent<'a>) + Send + Sync + 'static;
 
 /// Default observer: emits structured events through `tracing`.
-pub fn default_tracing_observer(event: RuntimeEvent) {
+pub fn default_tracing_observer(event: RuntimeEvent<'_>) {
     match event.kind {
         RuntimeEventKind::RequestStart {
             method,
@@ -134,7 +157,7 @@ pub fn default_tracing_observer(event: RuntimeEvent) {
     }
 }
 
-fn log_pipeline_framework_failure(event: RuntimeEvent, error: &ApigateFrameworkError) {
+fn log_pipeline_framework_failure(event: RuntimeEvent<'_>, error: &ApigateFrameworkError) {
     let status = error.status_code();
 
     if status.is_server_error() {
@@ -160,7 +183,7 @@ fn log_pipeline_framework_failure(event: RuntimeEvent, error: &ApigateFrameworkE
     }
 }
 
-fn log_dispatch_framework_failure(event: RuntimeEvent, error: &ApigateFrameworkError) {
+fn log_dispatch_framework_failure(event: RuntimeEvent<'_>, error: &ApigateFrameworkError) {
     let status = error.status_code();
 
     if status.is_server_error() {
@@ -186,7 +209,7 @@ fn log_dispatch_framework_failure(event: RuntimeEvent, error: &ApigateFrameworkE
     }
 }
 
-fn log_pipeline_debug_details(event: RuntimeEvent, error: &ApigateFrameworkError) {
+fn log_pipeline_debug_details(event: RuntimeEvent<'_>, error: &ApigateFrameworkError) {
     if !tracing::enabled!(target: "apigate::pipeline", tracing::Level::DEBUG) {
         return;
     }
@@ -205,7 +228,7 @@ fn log_pipeline_debug_details(event: RuntimeEvent, error: &ApigateFrameworkError
     );
 }
 
-fn log_dispatch_debug_details(event: RuntimeEvent, error: &ApigateFrameworkError) {
+fn log_dispatch_debug_details(event: RuntimeEvent<'_>, error: &ApigateFrameworkError) {
     if !tracing::enabled!(target: "apigate::dispatch", tracing::Level::DEBUG) {
         return;
     }
@@ -224,7 +247,7 @@ fn log_dispatch_debug_details(event: RuntimeEvent, error: &ApigateFrameworkError
     );
 }
 
-fn log_custom_pipeline_failure(event: RuntimeEvent, status: StatusCode) {
+fn log_custom_pipeline_failure(event: RuntimeEvent<'_>, status: StatusCode) {
     if status.is_server_error() {
         tracing::warn!(
             target: "apigate::pipeline",

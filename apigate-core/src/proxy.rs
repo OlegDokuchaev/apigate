@@ -22,7 +22,7 @@ use crate::route::{DstChunk, Rewrite, RewriteTemplate, RouteMeta, SrcSeg};
 
 /// Proxies an incoming request to an upstream backend:
 /// rewrite URI → strip hop-by-hop headers → set Host → forward → strip response hops.
-pub async fn proxy_request(
+pub(crate) async fn proxy_request(
     backend: &Backend,
     client: &Client<HttpConnector, Body>,
     meta: &RouteMeta,
@@ -222,7 +222,7 @@ fn make_path_and_query_owned(
 
 /// Removes hop-by-hop headers per RFC 7230 §6.1:
 /// first those listed in `Connection`, then the standard set.
-pub fn strip_hop_headers(headers: &mut HeaderMap) {
+fn strip_hop_headers(headers: &mut HeaderMap) {
     // Collect Connection tokens before removing
     let mut connection_tokens: SmallVec<[HeaderName; 8]> = SmallVec::new();
 

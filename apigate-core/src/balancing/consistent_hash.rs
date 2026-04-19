@@ -2,11 +2,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{BalanceCtx, Balancer};
 
+/// Consistent-hash balancer using the route affinity key when available.
 pub struct ConsistentHash {
     offset: AtomicUsize,
 }
 
 impl ConsistentHash {
+    /// Creates a consistent-hash balancer.
     pub fn new() -> Self {
         Self {
             offset: AtomicUsize::new(0),

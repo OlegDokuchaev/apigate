@@ -14,6 +14,10 @@ enum ApigateErrorRepr {
     Custom(Box<Response>),
 }
 
+/// Error returned from hooks and maps.
+///
+/// Framework errors are rendered through the configured error renderer.
+/// Custom responses created with [`Self::from_response`] bypass that renderer.
 #[derive(Debug)]
 pub struct ApigateError {
     repr: ApigateErrorRepr,
@@ -33,38 +37,47 @@ impl ApigateError {
         })
     }
 
+    /// Creates a framework-rendered HTTP error with a custom status and message.
     pub fn new(status: StatusCode, message: impl Into<Cow<'static, str>>) -> Self {
         Self::http(status, message)
     }
 
+    /// Creates a `400 Bad Request` framework-rendered error.
     pub fn bad_request(message: impl Into<Cow<'static, str>>) -> Self {
         Self::http(StatusCode::BAD_REQUEST, message)
     }
 
+    /// Creates a `401 Unauthorized` framework-rendered error.
     pub fn unauthorized(message: impl Into<Cow<'static, str>>) -> Self {
         Self::http(StatusCode::UNAUTHORIZED, message)
     }
 
+    /// Creates a `403 Forbidden` framework-rendered error.
     pub fn forbidden(message: impl Into<Cow<'static, str>>) -> Self {
         Self::http(StatusCode::FORBIDDEN, message)
     }
 
+    /// Creates a `413 Payload Too Large` framework-rendered error.
     pub fn payload_too_large(message: impl Into<Cow<'static, str>>) -> Self {
         Self::http(StatusCode::PAYLOAD_TOO_LARGE, message)
     }
 
+    /// Creates a `415 Unsupported Media Type` framework-rendered error.
     pub fn unsupported_media_type(message: impl Into<Cow<'static, str>>) -> Self {
         Self::http(StatusCode::UNSUPPORTED_MEDIA_TYPE, message)
     }
 
+    /// Creates a `502 Bad Gateway` framework-rendered error.
     pub fn bad_gateway(message: impl Into<Cow<'static, str>>) -> Self {
         Self::http(StatusCode::BAD_GATEWAY, message)
     }
 
+    /// Creates a `504 Gateway Timeout` framework-rendered error.
     pub fn gateway_timeout(message: impl Into<Cow<'static, str>>) -> Self {
         Self::http(StatusCode::GATEWAY_TIMEOUT, message)
     }
 
+    /// Creates a `500 Internal Server Error` framework-rendered error.
     pub fn internal(message: impl Into<Cow<'static, str>>) -> Self {
         Self::http(StatusCode::INTERNAL_SERVER_ERROR, message)
     }
@@ -85,6 +98,7 @@ impl ApigateError {
         Self::from_response((status, axum::Json(body)))
     }
 
+    /// Stores a JSON response with `400 Bad Request`.
     pub fn bad_request_json<T>(body: T) -> Self
     where
         axum::Json<T>: IntoResponse,
@@ -92,6 +106,7 @@ impl ApigateError {
         Self::json(StatusCode::BAD_REQUEST, body)
     }
 
+    /// Stores a JSON response with `401 Unauthorized`.
     pub fn unauthorized_json<T>(body: T) -> Self
     where
         axum::Json<T>: IntoResponse,
@@ -99,6 +114,7 @@ impl ApigateError {
         Self::json(StatusCode::UNAUTHORIZED, body)
     }
 
+    /// Stores a JSON response with `403 Forbidden`.
     pub fn forbidden_json<T>(body: T) -> Self
     where
         axum::Json<T>: IntoResponse,

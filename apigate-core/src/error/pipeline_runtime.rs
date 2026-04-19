@@ -1,35 +1,49 @@
 use http::StatusCode;
 use thiserror::Error;
 
+/// Errors produced by generated request pipelines.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ApigatePipelineError {
+    /// A generated hook/map wrapper could not find a required value in scope.
     #[error("missing value in request scope")]
     MissingFromScope(&'static str),
+    /// Request body was requested after already being consumed.
     #[error("request body already consumed")]
     RequestBodyAlreadyConsumed,
+    /// Request body exceeded the configured map body limit.
     #[error("request body is too large")]
     RequestBodyTooLarge(String),
+    /// JSON request body could not be deserialized.
     #[error("invalid json body")]
     InvalidJsonBody(String),
+    /// Mapped JSON output could not be serialized.
     #[error("failed to serialize mapped json")]
     FailedSerializeMappedJson(String),
+    /// Query string could not be deserialized.
     #[error("invalid query")]
     InvalidQuery(String),
+    /// Mapped query output could not be serialized.
     #[error("failed to serialize mapped query")]
     FailedSerializeMappedQuery(String),
+    /// URI could not be rebuilt after query/form mapping.
     #[error("failed to rebuild uri")]
     FailedRebuildUri(String),
+    /// Expected `application/x-www-form-urlencoded` body.
     #[error("expected application/x-www-form-urlencoded")]
     ExpectedFormUrlEncoded,
+    /// Form values from the query string could not be deserialized.
     #[error("invalid form query")]
     InvalidFormQuery(String),
+    /// Mapped form output could not be serialized.
     #[error("failed to serialize mapped form")]
     FailedSerializeMappedForm(String),
+    /// Form body could not be deserialized.
     #[error("invalid form body")]
     InvalidFormBody(String),
 }
 
 impl ApigatePipelineError {
+    /// Returns a user-facing message safe for default HTTP responses.
     pub fn user_message(&self) -> &'static str {
         match self {
             Self::MissingFromScope(_) => "missing value in request scope",
@@ -47,6 +61,7 @@ impl ApigatePipelineError {
         }
     }
 
+    /// Returns diagnostic details intended for logs, not default responses.
     pub fn debug_details(&self) -> Option<&str> {
         match self {
             Self::MissingFromScope(ty) => Some(ty),
@@ -63,6 +78,7 @@ impl ApigatePipelineError {
         }
     }
 
+    /// Returns the default HTTP status for this error.
     pub fn status_code(&self) -> StatusCode {
         match self {
             Self::MissingFromScope(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -80,6 +96,7 @@ impl ApigatePipelineError {
         }
     }
 
+    /// Returns a stable machine-readable error code.
     pub fn code(&self) -> &'static str {
         match self {
             Self::MissingFromScope(_) => "missing_from_scope",

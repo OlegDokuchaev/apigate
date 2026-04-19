@@ -2,12 +2,14 @@ use crate::backend::BackendPool;
 
 use super::{AffinityKey, CandidateSet, RouteCtx, RouteStrategy, RoutingDecision};
 
+/// Route strategy that uses a path parameter as the affinity key.
 #[derive(Debug, Clone)]
 pub struct PathSticky {
     param: &'static str,
 }
 
 impl PathSticky {
+    /// Creates a path-sticky route strategy.
     pub fn new(param: &'static str) -> Self {
         Self { param }
     }

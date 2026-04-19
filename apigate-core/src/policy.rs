@@ -3,9 +3,10 @@ use std::sync::Arc;
 use crate::balancing::{Balancer, ConsistentHash, LeastRequest, LeastTime, RoundRobin};
 use crate::routing::{HeaderSticky, NoRouteKey, PathSticky, RouteStrategy};
 
+/// Routing and balancing policy applied to one or more routes.
 pub struct Policy {
-    pub router: Arc<dyn RouteStrategy>,
-    pub balancer: Arc<dyn Balancer>,
+    pub(crate) router: Arc<dyn RouteStrategy>,
+    pub(crate) balancer: Arc<dyn Balancer>,
 }
 
 impl Policy {
@@ -51,6 +52,7 @@ impl Policy {
         Self::new().balancer(RoundRobin::new())
     }
 
+    /// Sets a custom routing strategy.
     pub fn router<R>(mut self, router: R) -> Self
     where
         R: RouteStrategy,
@@ -59,6 +61,7 @@ impl Policy {
         self
     }
 
+    /// Sets a custom load balancer.
     pub fn balancer<B>(mut self, balancer: B) -> Self
     where
         B: Balancer,

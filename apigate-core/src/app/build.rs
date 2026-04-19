@@ -20,6 +20,8 @@ use crate::routing::NoRouteKey;
 use crate::{Method, Routes};
 
 impl AppBuilder {
+    /// Creates a builder with default timeouts, round-robin policy, and no
+    /// runtime observer.
     pub fn new() -> Self {
         Self {
             backends: HashMap::new(),
@@ -36,6 +38,9 @@ impl AppBuilder {
         }
     }
 
+    /// Registers backend URLs for a service name.
+    ///
+    /// The service name must match `routes.service` when using [`Self::mount`].
     pub fn backend<I, S>(mut self, service: &str, urls: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -48,36 +53,45 @@ impl AppBuilder {
         self
     }
 
+    /// Registers a named routing/balancing policy.
+    ///
+    /// Routes can reference this name with `policy = "name"`.
     pub fn policy(mut self, name: &str, policy: Policy) -> Self {
         self.policies.insert(name.to_string(), Arc::new(policy));
         self
     }
 
+    /// Sets the fallback policy used by routes without an explicit policy.
     pub fn default_policy(mut self, policy: Policy) -> Self {
         self.default_policy = Arc::new(policy);
         self
     }
 
+    /// Sets the total timeout for a proxied upstream request.
     pub fn request_timeout(mut self, d: Duration) -> Self {
         self.request_timeout = d;
         self
     }
 
+    /// Sets the TCP connect timeout for upstream connections.
     pub fn connect_timeout(mut self, d: Duration) -> Self {
         self.connect_timeout = d;
         self
     }
 
+    /// Sets how long idle upstream connections are kept in the client pool.
     pub fn pool_idle_timeout(mut self, d: Duration) -> Self {
         self.pool_idle_timeout = d;
         self
     }
 
+    /// Sets the maximum request body size read by generated map/validation pipelines.
     pub fn map_body_limit(mut self, bytes: usize) -> Self {
         self.map_body_limit = bytes;
         self
     }
 
+    /// Inserts shared application state available to hooks and maps.
     pub fn state<T: Clone + Send + Sync + 'static>(mut self, val: T) -> Self {
         self.state.insert(val);
         self
@@ -119,6 +133,7 @@ impl AppBuilder {
         self
     }
 
+    /// Mounts a macro-generated service route collection.
     pub fn mount(mut self, routes: Routes) -> Self {
         self.mounted.push(routes);
         self
@@ -141,6 +156,7 @@ impl AppBuilder {
         self
     }
 
+    /// Builds the gateway application.
     pub fn build(self) -> Result<App, ApigateBuildError> {
         // HTTP client
         let mut connector = HttpConnector::new();
@@ -266,8 +282,6 @@ fn resolve_policy(
 }
 
 fn join(prefix: &str, path: &str) -> String {
-    // prefix="/sales", path="/ping" => "/sales/ping"
-    // prefix="/sales", path="/" => "/sales/"
     let mut s = String::with_capacity(prefix.len() + path.len());
     if prefix.ends_with('/') {
         s.push_str(prefix.trim_end_matches('/'));

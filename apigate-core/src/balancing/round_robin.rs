@@ -2,12 +2,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{BalanceCtx, Balancer};
 
+/// Stateless round-robin balancer over candidate backends.
 #[derive(Debug, Default)]
 pub struct RoundRobin {
     next: AtomicUsize,
 }
 
 impl RoundRobin {
+    /// Creates a round-robin balancer.
     pub fn new() -> Self {
         Self {
             next: AtomicUsize::new(0),

@@ -3,12 +3,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{BalanceCtx, Balancer, ResultEvent, StartEvent};
 
+/// Balancer that prefers the backend with the fewest in-flight requests.
 pub struct LeastRequest {
     in_flight: OnceLock<Box<[AtomicUsize]>>,
     offset: AtomicUsize,
 }
 
 impl LeastRequest {
+    /// Creates a least-request balancer.
     pub fn new() -> Self {
         Self {
             in_flight: OnceLock::new(),

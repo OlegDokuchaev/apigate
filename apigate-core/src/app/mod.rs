@@ -17,10 +17,18 @@ use crate::route::RouteMeta;
 mod build;
 mod dispatch;
 
+/// Built gateway application.
+///
+/// Use [`App::builder`] to configure routes, backends, policies, and runtime
+/// behavior, then pass the result to [`run`] or convert it into an axum router.
 pub struct App {
     router: Router,
 }
 
+/// Builder for an [`App`].
+///
+/// The builder owns all service registrations and produces the axum router,
+/// backend pools, shared state, proxy client, and runtime configuration.
 pub struct AppBuilder {
     backends: HashMap<String, Vec<String>>,
     mounted: Vec<Routes>,
@@ -52,6 +60,7 @@ impl Default for AppBuilder {
 }
 
 impl App {
+    /// Creates a new application builder.
     pub fn builder() -> AppBuilder {
         AppBuilder::new()
     }
@@ -76,6 +85,7 @@ impl App {
     }
 }
 
+/// Serves an [`App`] on the provided socket address.
 pub async fn run(addr: SocketAddr, app: App) -> std::io::Result<()> {
     run_router(addr, app.router).await
 }
@@ -85,6 +95,5 @@ pub async fn run(addr: SocketAddr, app: App) -> std::io::Result<()> {
 /// Useful when you need full control over outer tower/axum middleware stack.
 pub async fn run_router(addr: SocketAddr, router: Router) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    // axum::serve intentionally simple (и это нам подходит как внутренняя обертка)
     axum::serve(listener, router).await
 }

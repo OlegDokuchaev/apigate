@@ -5,12 +5,14 @@ use super::{BalanceCtx, Balancer, ResultEvent};
 
 const EWMA_WEIGHT: u64 = 10;
 
+/// Balancer that prefers the backend with the lowest observed response latency.
 pub struct LeastTime {
     ewma_us: OnceLock<Box<[AtomicU64]>>,
     offset: AtomicUsize,
 }
 
 impl LeastTime {
+    /// Creates a least-time balancer.
     pub fn new() -> Self {
         Self {
             ewma_us: OnceLock::new(),

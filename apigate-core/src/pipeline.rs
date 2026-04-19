@@ -24,7 +24,7 @@ pub struct RequestScope<'a> {
 }
 
 impl<'a> RequestScope<'a> {
-    pub fn new(shared: &'a Extensions, body: Body, body_limit: usize) -> Self {
+    pub(crate) fn new(shared: &'a Extensions, body: Body, body_limit: usize) -> Self {
         Self {
             shared,
             local: Extensions::new(),
@@ -33,10 +33,14 @@ impl<'a> RequestScope<'a> {
         }
     }
 
+    /// Takes ownership of the request body.
+    ///
+    /// Generated pipelines use this when validating or mapping request bodies.
     pub fn take_body(&mut self) -> Option<Body> {
         self.body.take()
     }
 
+    /// Returns the maximum number of bytes generated pipelines may read.
     pub fn body_limit(&self) -> usize {
         self.body_limit
     }
@@ -72,8 +76,12 @@ impl<'a> RequestScope<'a> {
 /// Single function that orchestrates all request processing:
 /// parse path params → before hooks → validate/parse body → map → return body.
 pub type PipelineFn = for<'a> fn(PartsCtx<'a>, RequestScope<'a>) -> PipelineFuture<'a>;
+/// Boxed future returned by a generated pipeline.
 pub type PipelineFuture<'a> = Pin<Box<dyn Future<Output = PipelineResult> + Send + 'a>>;
+/// Result returned by a generated pipeline.
 pub type PipelineResult = Result<Body, ApigateError>;
 
+/// Result type returned by `#[apigate::hook]` functions.
 pub type HookResult = Result<(), ApigateError>;
+/// Result type returned by `#[apigate::map]` functions.
 pub type MapResult<T> = Result<T, ApigateError>;
