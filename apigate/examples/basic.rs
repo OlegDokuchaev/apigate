@@ -1,23 +1,23 @@
-//! Базовый пример: passthrough, rewrite, rewrite-шаблон.
-//! Без хуков, валидации и map — только проксирование.
+//! Basic example: passthrough proxying, static rewrite, and rewrite templates.
+//! No hooks, validation, or maps are used here.
 
 use std::net::SocketAddr;
 
 #[apigate::service(prefix = "/sales")]
 mod sales {
-    /// Passthrough: проксирует /ping как есть
+    /// Passthrough: forwards `/ping` as-is after stripping the service prefix.
     #[apigate::get("/ping")]
     async fn ping() {}
 
-    /// Статический rewrite: /public -> /internal
+    /// Static rewrite: `/public` -> `/internal`.
     #[apigate::get("/public", to = "/internal")]
     async fn public_alias() {}
 
-    /// Rewrite-шаблон: /item/{id}/review -> /api/v2/reviews/{id}
+    /// Rewrite template: `/item/{id}/review` -> `/api/v2/reviews/{id}`.
     #[apigate::get("/item/{id}/review", to = "/api/v2/reviews/{id}")]
     async fn item_review() {}
 
-    /// Фоллбек
+    /// Plain fallback-style route used by the example curl output.
     #[apigate::get("/anything")]
     async fn anything() {}
 }
@@ -32,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
 
     print!(
         "\
-basic — http://{listen}
+basic - http://{listen}
 
 Passthrough:   curl http://{listen}/sales/ping
 Rewrite:       curl http://{listen}/sales/public

@@ -1,4 +1,5 @@
-//! Path-параметры: валидация, доступ в хуках (&T), доступ в map-функциях.
+//! Path parameters: validation, hook access through `&T`, and map access
+//! through `&T` from `RequestScope`.
 
 use std::net::SocketAddr;
 
@@ -6,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
-// Path-параметры (Deserialize + Clone)
+// Path parameters (`Deserialize + Clone`)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize)]
@@ -15,7 +16,7 @@ struct SaleIdPath {
 }
 
 // ---------------------------------------------------------------------------
-// Типы для map
+// Map types
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
@@ -30,10 +31,10 @@ struct UpdateSaleService {
 }
 
 // ---------------------------------------------------------------------------
-// Хуки
+// Hooks
 // ---------------------------------------------------------------------------
 
-/// Читает path-параметры через &T (без удаления из scope)
+/// Reads path parameters through `&T` without removing them from scope.
 #[apigate::hook]
 async fn log_sale_access(path: &SaleIdPath, ctx: &mut apigate::PartsCtx) -> apigate::HookResult {
     println!("[hook] sale id={}", path.id);
@@ -42,10 +43,10 @@ async fn log_sale_access(path: &SaleIdPath, ctx: &mut apigate::PartsCtx) -> apig
 }
 
 // ---------------------------------------------------------------------------
-// Map-функции
+// Map functions
 // ---------------------------------------------------------------------------
 
-/// Доступ к path-параметрам (&SaleIdPath) в map-функции
+/// Reads path parameters (`&SaleIdPath`) inside a map function.
 #[apigate::map]
 async fn remap_update_sale(
     input: UpdateSaleInput,
@@ -58,24 +59,24 @@ async fn remap_update_sale(
 }
 
 // ---------------------------------------------------------------------------
-// Сервис
+// Service
 // ---------------------------------------------------------------------------
 
 #[apigate::service(name = "sales", prefix = "/sales")]
 mod sales {
     use super::*;
 
-    /// Валидация path (id = UUID) + доступ к path в хуке через &SaleIdPath
+    /// Validates `id` as UUID and exposes path data to the hook.
     #[apigate::get("/{id}", path = SaleIdPath, before = [log_sale_access])]
     async fn get_by_id() {}
 
-    /// Path + json + map: map-функция получает &SaleIdPath из scope
+    /// Path + JSON + map: the map receives `&SaleIdPath` from scope.
     #[apigate::post("/{id}/update", path = SaleIdPath, json = UpdateSaleInput, map = remap_update_sale)]
     async fn update_sale() {}
 }
 
 // ---------------------------------------------------------------------------
-// Точка входа
+// Entrypoint
 // ---------------------------------------------------------------------------
 
 #[tokio::main]
@@ -87,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
         .build()?;
 
     print!("\
-path — http://{listen}
+path - http://{listen}
 
 Valid UUID:      curl http://{listen}/sales/11111111-1111-1111-1111-111111111111
 Invalid:         curl http://{listen}/sales/not-a-uuid

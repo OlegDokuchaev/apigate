@@ -1,5 +1,5 @@
-//! Tower/axum middleware поверх apigate:
-//! добавляем `tower_http::TraceLayer` через `.with_router(...)`.
+//! Tower/axum middleware on top of ApiGate:
+//! adds `tower_http::TraceLayer` through `.with_router(...)`.
 
 use std::net::SocketAddr;
 
@@ -36,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
 
     print!(
         "\
-tower_logging — http://{listen}
+tower_logging - http://{listen}
 
 RUST_LOG=debug,apigate=debug,tower_http=debug cargo run --example tower_logging
 

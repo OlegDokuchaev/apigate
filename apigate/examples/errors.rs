@@ -1,5 +1,5 @@
-//! Ошибки: глобальный JSON renderer, разделение user/debug сообщений
-//! и кастомный JSON-ответ из hook.
+//! Error handling: global JSON renderer, user/debug message separation,
+//! and a custom JSON response returned from a hook.
 
 use std::net::SocketAddr;
 
@@ -27,10 +27,10 @@ struct BuyInputUpstream {
 
 fn render_error(err: ApigateFrameworkError) -> Response {
     match &err {
-        // Пример точечного override:
-        // 1) получаем конкретный enum-вариант
-        // 2) логируем внутренние детали
-        // 3) возвращаем полностью другой HTTP-результат
+        // Targeted override example:
+        // 1. Match a concrete internal error enum variant.
+        // 2. Log internal details that should not be returned to the client.
+        // 3. Return a different HTTP response shape/status.
         ApigateFrameworkError::Pipeline(ApigatePipelineError::InvalidJsonBody(details)) => {
             eprintln!("[apigate][invalid_json_body] details={details}");
             let body = serde_json::json!({
@@ -105,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
 
     print!(
         "\
-errors — http://{listen}
+errors - http://{listen}
 
 Hook custom JSON error (no auth):
   curl -X POST -H 'content-type: application/json' \

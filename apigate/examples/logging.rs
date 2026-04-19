@@ -1,5 +1,5 @@
-//! Runtime observability: built-in tracing adapter
-//! + кастомный observer для событий apigate.
+//! Runtime observability: the built-in tracing adapter plus a custom observer
+//! for ApiGate runtime events.
 
 use std::net::SocketAddr;
 
@@ -47,10 +47,10 @@ fn init_tracing() {
 }
 
 fn observe(event: apigate::RuntimeEvent<'_>) {
-    // Сохраняем дефолтный tracing-лог от apigate
+    // Keep ApiGate's default structured tracing output.
     apigate::default_tracing_observer(event);
 
-    // И добавляем свою доменную "надстройку" (например, аудит)
+    // Add application-specific observability on top, for example audit logs.
     if let apigate::RuntimeEventKind::UpstreamSucceeded {
         backend_index,
         status,
@@ -82,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
 
     print!(
         "\
-logging — http://{listen}
+logging - http://{listen}
 
 RUST_LOG=debug,apigate=trace cargo run --example logging
 

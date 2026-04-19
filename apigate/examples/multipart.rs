@@ -1,5 +1,5 @@
-//! Multipart: загрузка файлов через proxy.
-//! Body проксируется как есть (passthrough), без чтения и буферизации.
+//! Multipart uploads through the proxy.
+//! The body is forwarded as passthrough without reading or buffering it.
 
 use std::net::SocketAddr;
 
@@ -16,11 +16,11 @@ async fn inject_user_headers(ctx: &mut apigate::PartsCtx) -> apigate::HookResult
 mod files {
     use super::*;
 
-    /// Multipart с аутентификацией: проверяет токен, проксирует файл
+    /// Multipart with auth: validates token and proxies the file body.
     #[apigate::post("/upload", multipart, before = [inject_user_headers])]
     async fn upload() {}
 
-    /// Multipart без хуков: простой passthrough
+    /// Multipart without hooks: plain passthrough.
     #[apigate::post("/upload-public", multipart)]
     async fn upload_public() {}
 }
@@ -34,11 +34,11 @@ async fn main() -> anyhow::Result<()> {
         .build()?;
 
     print!("\
-multipart — http://{listen}
+multipart - http://{listen}
 
-С auth:      curl -X POST -H 'authorization: Bearer t' -F 'file=@README.md' http://{listen}/files/upload
-Без auth:    curl -X POST -F 'file=@README.md' http://{listen}/files/upload-public
-Нет токена:  curl -X POST -F 'file=@README.md' http://{listen}/files/upload
+With auth:   curl -X POST -H 'authorization: Bearer t' -F 'file=@README.md' http://{listen}/files/upload
+No auth:     curl -X POST -F 'file=@README.md' http://{listen}/files/upload-public
+Missing auth: curl -X POST -F 'file=@README.md' http://{listen}/files/upload
 
 Upstream:    caddy run --config apigate/examples/upstream/Caddyfile
 ");

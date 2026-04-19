@@ -1,12 +1,12 @@
-//! Хуки: аутентификация, shared state, инъекция заголовков,
-//! цепочка хуков, передача данных между хуками через scope.
+//! Hooks: authentication, shared state, header injection, hook chains,
+//! and passing per-request data between hooks through `RequestScope`.
 
 use std::net::SocketAddr;
 
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
-// Общий state приложения (доступен как &T в хуках)
+// Shared application state. Hooks can request it as `&T`.
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]
@@ -15,7 +15,7 @@ struct AppConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Per-request данные (передаются между хуками через scope)
+// Per-request data passed between hooks through `RequestScope`.
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]
@@ -24,10 +24,10 @@ struct RequestMeta {
 }
 
 // ---------------------------------------------------------------------------
-// Хуки
+// Hooks
 // ---------------------------------------------------------------------------
 
-/// Проверяет api key через shared state (&AppConfig из .state())
+/// Checks an API key using shared state (`&AppConfig` from `.state(...)`).
 #[apigate::hook]
 async fn require_api_key(ctx: &mut apigate::PartsCtx, config: &AppConfig) -> apigate::HookResult {
     let key = ctx
@@ -39,7 +39,7 @@ async fn require_api_key(ctx: &mut apigate::PartsCtx, config: &AppConfig) -> api
     Ok(())
 }
 
-/// Проверяет токен авторизации, ставит заголовки для upstream
+/// Checks authorization and injects user headers for the upstream request.
 #[apigate::hook]
 async fn inject_user_headers(ctx: &mut apigate::PartsCtx) -> apigate::HookResult {
     let _token = ctx
@@ -50,7 +50,7 @@ async fn inject_user_headers(ctx: &mut apigate::PartsCtx) -> apigate::HookResult
     Ok(())
 }
 
-/// Генерирует request-id и сохраняет RequestMeta в scope для следующих хуков
+/// Generates a request id and stores `RequestMeta` for later hooks.
 #[apigate::hook]
 async fn set_request_id(
     ctx: &mut apigate::PartsCtx,
@@ -62,7 +62,7 @@ async fn set_request_id(
     Ok(())
 }
 
-/// Забирает RequestMeta из scope (вставленный set_request_id) через owned-параметр
+/// Takes `RequestMeta` from scope through an owned parameter.
 #[apigate::hook]
 async fn log_request_meta(meta: RequestMeta) -> apigate::HookResult {
     println!("[hook] request_id={}", meta.request_id);
@@ -70,23 +70,23 @@ async fn log_request_meta(meta: RequestMeta) -> apigate::HookResult {
 }
 
 // ---------------------------------------------------------------------------
-// Сервис
+// Service
 // ---------------------------------------------------------------------------
 
 #[apigate::service(name = "sales", prefix = "/sales")]
 mod sales {
     use super::*;
 
-    /// Shared state в хуке: require_api_key получает &AppConfig
+    /// Shared state in a hook: `require_api_key` receives `&AppConfig`.
     #[apigate::get("/admin/stats", before = [require_api_key])]
     async fn admin_stats() {}
 
-    /// Аутентификация: проверяет токен, инжектирует заголовки в upstream
+    /// Authorization hook: validates token and injects upstream headers.
     #[apigate::get("/user", before = [inject_user_headers])]
     async fn user_profile() {}
 
-    /// Цепочка из 4 хуков + передача данных между ними через scope:
-    /// require_api_key -> inject_user_headers -> set_request_id -> log_request_meta
+    /// Four-hook chain with per-request data passed through scope:
+    /// require_api_key -> inject_user_headers -> set_request_id -> log_request_meta.
     #[apigate::get(
         "/secure-user",
         before = [require_api_key, inject_user_headers, set_request_id, log_request_meta]
@@ -95,7 +95,7 @@ mod sales {
 }
 
 // ---------------------------------------------------------------------------
-// Точка входа
+// Entrypoint
 // ---------------------------------------------------------------------------
 
 #[tokio::main]
@@ -110,7 +110,7 @@ async fn main() -> anyhow::Result<()> {
         .build()?;
 
     print!("\
-hooks — http://{listen}
+hooks - http://{listen}
 
 Shared state:    curl -H 'x-api-key: secret-key' http://{listen}/sales/admin/stats
 Wrong key:       curl -H 'x-api-key: wrong' http://{listen}/sales/admin/stats

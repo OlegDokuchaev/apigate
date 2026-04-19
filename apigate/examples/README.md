@@ -1,24 +1,24 @@
-# Примеры
+# Examples
 
-| Пример | Что показывает |
+| Example | Shows |
 |---|---|
-| `basic` | Passthrough, static rewrite (`to`), rewrite-шаблон (`{id}`) |
-| `hooks` | Shared state в хуке, auth, инъекция заголовков, цепочка хуков, per-request data через scope |
-| `errors` | Глобальный JSON error renderer, `user_message`/`debug_details`, кастомный JSON из hook |
-| `logging` | `tracing` + `runtime_observer`, кастомизация runtime-событий apigate |
-| `tower_logging` | Внешний `tower_http::TraceLayer` через `.with_router(...)` |
-| `path` | Валидация path (UUID), доступ к path в хуке (`&T`), доступ к path в map |
-| `map` | Преобразование query, json (+ shared state), form |
-| `policy` | HeaderSticky + ConsistentHash, LeastRequest, LeastTime, RoundRobin |
-| `multipart` | Загрузка файлов: passthrough с auth и без |
+| `basic` | Passthrough proxying, static rewrite (`to`), and rewrite templates (`{id}`). |
+| `hooks` | Shared state in hooks, auth, header injection, hook chains, and per-request data through scope. |
+| `errors` | Global JSON error renderer, `user_message`/`debug_details`, and custom JSON errors from hooks. |
+| `logging` | `tracing` integration with `runtime_observer` and custom ApiGate runtime events. |
+| `tower_logging` | External `tower_http::TraceLayer` added through `.with_router(...)`. |
+| `path` | Path validation (UUID), path data in hooks (`&T`), and path data in map functions. |
+| `map` | Query, JSON, and form transformations, including shared state access from a map. |
+| `policy` | HeaderSticky + ConsistentHash, PathSticky, LeastRequest, LeastTime, and RoundRobin. |
+| `multipart` | Multipart upload passthrough with and without auth. |
 
-## Запуск
+## Running
 
 ```sh
-# 1) Mock upstream (один Caddyfile для всех примеров)
+# 1. Start the mock upstream. One Caddyfile is shared by all examples.
 caddy run --config apigate/examples/upstream/Caddyfile
 
-# 2) Любой пример (в другом терминале)
+# 2. Run any example in another terminal.
 cargo run --example basic
 cargo run --example hooks
 cargo run --example errors
@@ -30,4 +30,4 @@ cargo run --example policy
 cargo run --example multipart
 ```
 
-Каждый пример при запуске выводит curl-команды для тестирования.
+Each example prints ready-to-run `curl` commands.

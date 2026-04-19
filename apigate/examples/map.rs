@@ -1,5 +1,5 @@
-//! Map: преобразование query, json, form перед отправкой в upstream.
-//! Shared state (&AppConfig) доступен в map-функциях.
+//! Maps: transform query, JSON, and form data before forwarding upstream.
+//! Shared state (`&AppConfig`) can be requested by map functions.
 
 use std::net::SocketAddr;
 
@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
-// Общий state приложения (доступен как &T в map)
+// Shared application state. Maps can request it as `&T`.
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]
@@ -16,7 +16,7 @@ struct AppConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Типы для query map
+// Query map types
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
@@ -34,7 +34,7 @@ struct ProductsQueryService {
 }
 
 // ---------------------------------------------------------------------------
-// Типы для json map
+// JSON map types
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize)]
@@ -53,7 +53,7 @@ struct ServiceBuyInput {
 }
 
 // ---------------------------------------------------------------------------
-// Типы для form map
+// Form map types
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
@@ -69,10 +69,10 @@ struct LegacyFormService {
 }
 
 // ---------------------------------------------------------------------------
-// Хуки
+// Hooks
 // ---------------------------------------------------------------------------
 
-/// Аутентификация (нужна для /buy)
+/// Authorization hook used by `/buy`.
 #[apigate::hook]
 async fn inject_user_headers(ctx: &mut apigate::PartsCtx) -> apigate::HookResult {
     let _token = ctx
@@ -83,10 +83,10 @@ async fn inject_user_headers(ctx: &mut apigate::PartsCtx) -> apigate::HookResult
 }
 
 // ---------------------------------------------------------------------------
-// Map-функции
+// Map functions
 // ---------------------------------------------------------------------------
 
-/// Преобразование query: page/size -> offset/limit
+/// Query transformation: page/size -> offset/limit.
 #[apigate::map]
 async fn remap_products_query(input: ProductsQuery) -> apigate::MapResult<ProductsQueryService> {
     let page = input.page.unwrap_or(1).max(1);
@@ -101,7 +101,7 @@ async fn remap_products_query(input: ProductsQuery) -> apigate::MapResult<Produc
     })
 }
 
-/// Преобразование JSON + доступ к shared state (&AppConfig) в map
+/// JSON transformation with shared state access (`&AppConfig`).
 #[apigate::map]
 async fn remap_buy_json(
     input: PublicBuyInput,
@@ -127,7 +127,7 @@ async fn remap_buy_json(
     })
 }
 
-/// Преобразование form: category -> category_code
+/// Form transformation: category -> category_code.
 #[apigate::map]
 async fn remap_legacy_form(input: LegacyFormPublic) -> apigate::MapResult<LegacyFormService> {
     Ok(LegacyFormService {
@@ -142,28 +142,28 @@ async fn remap_legacy_form(input: LegacyFormPublic) -> apigate::MapResult<Legacy
 }
 
 // ---------------------------------------------------------------------------
-// Сервис
+// Service
 // ---------------------------------------------------------------------------
 
 #[apigate::service(name = "sales", prefix = "/sales")]
 mod sales {
     use super::*;
 
-    /// Преобразование query-параметров через map
+    /// Query parameters transformed through a map function.
     #[apigate::get("/products", query = ProductsQuery, map = remap_products_query)]
     async fn get_products() {}
 
-    /// Преобразование JSON через map + shared state в map-функции
+    /// JSON body transformed through a map function with shared state access.
     #[apigate::post("/buy", json = PublicBuyInput, before = [inject_user_headers], map = remap_buy_json)]
     async fn buy() {}
 
-    /// Преобразование form через map
+    /// Form body transformed through a map function.
     #[apigate::post("/legacy-create", form = LegacyFormPublic, map = remap_legacy_form)]
     async fn legacy_create() {}
 }
 
 // ---------------------------------------------------------------------------
-// Точка входа
+// Entrypoint
 // ---------------------------------------------------------------------------
 
 #[tokio::main]
@@ -178,7 +178,7 @@ async fn main() -> anyhow::Result<()> {
         .build()?;
 
     print!("\
-map — http://{listen}
+map - http://{listen}
 
 Query map:   curl 'http://{listen}/sales/products?page=2&size=5&q=test'
 Json map:    curl -X POST -H 'authorization: Bearer t' -H 'content-type: application/json' \
