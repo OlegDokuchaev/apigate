@@ -1,8 +1,9 @@
 [package]
 name = "apigate"
-description = "Macro-driven API gateway for Rust — declarative routing, request transformation, and reverse proxying built on axum"
+description = "Macro-driven API gateway for Rust: declarative routing, request transformation, and reverse proxying built on axum"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
@@ -25,4 +26,6 @@ serde = { version = "1", features = ["derive"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace"] }
+trybuild = "1"
