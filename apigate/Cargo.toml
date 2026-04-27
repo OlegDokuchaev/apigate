@@ -12,8 +12,8 @@ keywords = ["api-gateway", "proxy", "reverse-proxy", "axum", "macros"]
 categories = ["web-programming::http-server", "network-programming"]
 
 [dependencies]
-apigate-core = { path = "../apigate-core", version = "0.2.5" }
-apigate-macros = { path = "../apigate-macros", version = "0.2.5" }
+apigate-core = { path = "../apigate-core", version = "0.2.6" }
+apigate-macros = { path = "../apigate-macros", version = "0.2.6" }
 axum = "0.8.8"
 http = "1.4.0"
 serde_json = "1.0.149"
