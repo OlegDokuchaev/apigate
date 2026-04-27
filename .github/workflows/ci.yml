@@ -1,0 +1,152 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Check declared rust-version
+        run: cargo check --workspace --all-features --locked
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Run workspace tests
+        run: cargo test --workspace --all-targets --all-features --locked
+
+      - name: Run examples
+        run: cargo test --workspace --examples --all-features --locked
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Build public docs
+        run: cargo doc --workspace --all-features --no-deps --locked
+
+      - name: Enforce core public docs
+        run: cargo rustdoc -p apigate-core --all-features --locked -- -D missing_docs
+
+      - name: Enforce macro public docs
+        run: cargo rustdoc -p apigate-macros --all-features --locked -- -D missing_docs
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Package core crate
+        run: cargo package -p apigate-core --locked
+
+      - name: Package macros crate
+        run: cargo package -p apigate-macros --locked
+
+      - name: Package facade crate
+        run: cargo package -p apigate --locked --no-verify
