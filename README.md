@@ -1,5 +1,11 @@
 # ApiGate
 
+[![CI](https://github.com/OlegDokuchaev/apigate/actions/workflows/ci.yml/badge.svg)](https://github.com/OlegDokuchaev/apigate/actions/workflows/ci.yml)
+[![Coverage](https://github.com/OlegDokuchaev/apigate/actions/workflows/coverage.yml/badge.svg)](https://github.com/OlegDokuchaev/apigate/actions/workflows/coverage.yml)
+[![Crates.io](https://img.shields.io/crates/v/apigate.svg)](https://crates.io/crates/apigate)
+[![Docs.rs](https://docs.rs/apigate/badge.svg)](https://docs.rs/apigate)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 ApiGate is a macro-driven API gateway for Rust services.
 
 It lets you declare reverse-proxy routes as Rust modules, validate typed request data, run pre-proxy hooks, transform requests before forwarding, choose upstream backends with routing/balancing policies, and customize errors and observability without exposing axum details in your application code.
@@ -43,6 +49,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tower-http = { version = "0.6", features = ["trace"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 ```
+
+## Supported Rust
+
+ApiGate declares Rust 1.88 as its package `rust-version`. Rust 1.88 stabilizes `let` chains in the Rust 2024 edition, which ApiGate uses in its implementation. CI checks that the library crates compile on Rust 1.88 and runs the full test suite on the latest stable toolchain.
 
 ## Quick Start
 
@@ -870,12 +880,52 @@ Common builder methods:
 | `.request_timeout(duration)` | Total timeout for an upstream request. Default: 30s. |
 | `.connect_timeout(duration)` | TCP connect timeout for upstream connections. Default: 5s. |
 | `.pool_idle_timeout(duration)` | Idle connection lifetime in the upstream client pool. Default: 90s. |
+| `.pool_max_idle_per_host(max)` | Maximum idle upstream connections per host. Default: unlimited. |
+| `.upstream(config)` | Replace the upstream transport configuration. |
 | `.map_body_limit(bytes)` | Max body size read by generated validation/map pipelines. Default: 2 MiB. |
 | `.error_renderer(renderer)` | Configure framework error rendering. |
 | `.enable_default_tracing()` | Emit built-in runtime events through `tracing`. |
 | `.runtime_observer(observer)` | Configure a custom runtime observer. |
 | `.disable_runtime_observer()` | Disable runtime observer events. |
 | `.build()` | Build the gateway app. |
+
+`UpstreamConfig` methods:
+
+| Method | Description |
+|---|---|
+| `.connect_timeout(duration)` | TCP connect timeout for upstream connections. |
+| `.pool_idle_timeout(duration)` | Idle connection lifetime in the upstream client pool. |
+| `.pool_max_idle_per_host(max)` | Maximum idle upstream connections per host. |
+| `.tcp_nodelay(bool)` | Toggle `TCP_NODELAY` for upstream TCP connections. |
+| `.configure_client(|client| ...)` | Customize hyper-util's legacy client builder. |
+| `.configure_connector(|connector| ...)` | Customize hyper-util's `HttpConnector`. |
+
+For reusable or detailed transport settings, build a config value from defaults:
+
+```rust
+let upstream = apigate::UpstreamConfig::default()
+    .connect_timeout(std::time::Duration::from_secs(3))
+    .tcp_nodelay(true);
+
+let app = apigate::App::builder()
+    .mount_service(sales::routes(), ["http://127.0.0.1:8081"])
+    .upstream(upstream)
+    .build()?;
+```
+
+Use the hyper-util escape hatches for less common client or connector knobs:
+
+```rust
+let upstream = apigate::UpstreamConfig::default()
+    .configure_connector(|connector| {
+        connector.set_keepalive(Some(std::time::Duration::from_secs(30)));
+        connector.set_recv_buffer_size(Some(512 * 1024));
+        connector.set_happy_eyeballs_timeout(Some(std::time::Duration::from_millis(200)));
+    })
+    .configure_client(|client| {
+        client.http2_adaptive_window(true);
+    });
+```
 
 `App` methods:
 
@@ -891,6 +941,21 @@ apigate::run(addr, app).await?;
 apigate::run_router(addr, router).await?;
 ```
 
+Tune the listener socket when ApiGate owns it:
+
+```rust
+let config = apigate::ServeConfig::new()
+    .backlog(2048)
+    .reuse_address(true)
+    .tcp_nodelay(true);
+
+apigate::run_with(addr, app, config).await?;
+```
+
+`ServeConfig` also supports listener buffer sizes, IPv6-only binding, and
+`SO_REUSEPORT` on supported Unix platforms. Use `run_router_with` for the same
+socket options with a manually composed router.
+
 ## Performance Notes
 
 ApiGate is designed to avoid unnecessary work on routes that do not need it:
@@ -902,7 +967,7 @@ ApiGate is designed to avoid unnecessary work on routes that do not need it:
 - Shared app state is accessed by reference through `Extensions`; read-only `&T` access does not clone per request.
 - Per-request `RequestScope` local storage allocates only when values are inserted.
 - Route metadata is stored in a table and request routing carries a small route index.
-- The upstream client uses keep-alive pooling, `TCP_NODELAY`, configurable connect timeout, and configurable idle timeout.
+- The upstream client uses keep-alive pooling, `TCP_NODELAY`, configurable connect timeout, configurable idle timeout, and exposes hyper-util client/connector tuning hooks.
 - Built-in balancers are lock-free and use atomics.
 - Runtime observer is disabled by default; when disabled, the hot path only performs an `Option` check.
 
@@ -924,6 +989,7 @@ cargo run --example hooks
 cargo run --example errors
 cargo run --example logging
 cargo run --example tower_logging
+cargo run --example runtime_tuning
 cargo run --example path
 cargo run --example map
 cargo run --example policy
@@ -939,6 +1005,7 @@ Example guide:
 | `errors` | Global JSON error renderer, user/debug message separation, custom JSON from hooks. |
 | `logging` | Built-in tracing observer and custom runtime observer. |
 | `tower_logging` | External `tower_http::TraceLayer` with `.with_router(...)`. |
+| `runtime_tuning` | Listener socket tuning plus upstream hyper-util client/connector settings. |
 | `path` | Typed path validation, path data in hooks, path data in maps. |
 | `map` | Query, JSON, and form transformations. |
 | `policy` | Header/path sticky routing, consistent hash, least-request, least-time, round-robin. |
