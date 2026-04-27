@@ -1,1 +1,31 @@
-/target
+# Rust build output
+/target/
+
+# Cargo package/publish scratch files
+*.crate
+
+# Trybuild writes new stderr snapshots here before they are accepted.
+/apigate/wip/
+
+# Coverage and profiling artifacts
+/coverage/
+/lcov.info
+/cobertura.xml
+/tarpaulin-report.html
+*.profraw
+*.profdata
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Editors and IDEs
+/.idea/
+/.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
