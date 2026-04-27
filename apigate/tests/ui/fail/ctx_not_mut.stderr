@@ -1,0 +1,5 @@
+error: `PartsCtx` parameter must be `&mut PartsCtx`
+ --> tests/ui/fail/ctx_not_mut.rs:2:20
+  |
+2 | async fn hook(ctx: &apigate::PartsCtx<'_>) -> apigate::HookResult {
+  |                    ^

@@ -1,0 +1,8 @@
+error: #[apigate::map] requires owned input parameter
+ --> tests/ui/fail/map_without_owned_input.rs:5:1
+  |
+5 | / async fn map_without_input(
+6 | |     state: &AppState,
+7 | |     ctx: &mut apigate::PartsCtx<'_>,
+8 | | ) -> apigate::MapResult<Output> {
+  | |_______________________________^

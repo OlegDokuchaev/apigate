@@ -1,0 +1,5 @@
+error: `#[apigate::get]` must be used inside a `#[apigate::service] mod ... {}` module
+ --> tests/ui/fail/route_outside_service.rs:2:1
+  |
+2 | async fn items() {}
+  | ^^^^^^^^^^^^^^^^^^^

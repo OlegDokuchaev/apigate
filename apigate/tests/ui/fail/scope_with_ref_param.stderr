@@ -1,0 +1,8 @@
+error: `&mut RequestScope` cannot be combined with borrowed `&T` or `&mut T` parameters in #[apigate::hook]
+ --> tests/ui/fail/scope_with_ref_param.rs:4:1
+  |
+4 | / async fn hook(
+5 | |     scope: &mut apigate::RequestScope<'_>,
+6 | |     state: &AppState,
+7 | | ) -> apigate::HookResult {
+  | |________________________^

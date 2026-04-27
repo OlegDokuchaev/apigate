@@ -1,0 +1,5 @@
+error: #[apigate::hook] requires an async function
+ --> tests/ui/fail/hook_not_async.rs:2:1
+  |
+2 | fn hook() -> apigate::HookResult {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

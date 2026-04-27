@@ -1,0 +1,7 @@
+error: `map` requires one of `query = T`, `json = T`, or `form = T`
+  --> tests/ui/fail/map_without_data.rs:10:1
+   |
+10 | #[apigate::service(name = "sales", prefix = "/sales")]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `apigate::service` (in Nightly builds, run with -Z macro-backtrace for more info)

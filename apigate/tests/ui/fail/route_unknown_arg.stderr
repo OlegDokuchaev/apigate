@@ -1,0 +1,5 @@
+error: unknown route argument, expected one of: `to`, `policy`, `before`, `map`, `query`, `json`, `form`, `path`
+ --> tests/ui/fail/route_unknown_arg.rs:3:30
+  |
+3 |     #[apigate::get("/items", unknown = Input)]
+  |                              ^^^^^^^
