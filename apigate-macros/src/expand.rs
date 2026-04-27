@@ -11,28 +11,28 @@ use crate::apigate_crate_path;
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]
-enum ParamKind {
-    Ctx,
-    Scope,
-    Ref(Type),
-    MutRef(Type),
-    Owned,
+enum ParamSource {
+    PartsCtx,
+    RequestScope,
+    ScopeRef(Type),
+    ScopeMut(Type),
+    ScopeTake,
 }
 
 #[derive(Clone)]
 struct ParamPlan {
     pat: Pat,
     ty: Type,
-    kind: ParamKind,
+    source: ParamSource,
 }
 
 #[derive(Clone)]
-struct SpecialPaths {
+struct SpecialTypePaths {
     ctx: Path,
     scope: Path,
 }
 
-impl SpecialPaths {
+impl SpecialTypePaths {
     fn new(apigate: &TokenStream2) -> syn::Result<Self> {
         Ok(Self {
             ctx: syn::parse2(quote!(#apigate::PartsCtx))?,
@@ -41,7 +41,28 @@ impl SpecialPaths {
     }
 }
 
-fn classify_param(ty: &Type, special: &SpecialPaths) -> syn::Result<ParamKind> {
+#[derive(Clone, Copy)]
+pub(crate) enum ExpansionMode {
+    /// Expand an `#[apigate::hook]` function.
+    Hook,
+    /// Expand an `#[apigate::map]` function.
+    Map,
+}
+
+impl ExpansionMode {
+    fn macro_name(self) -> &'static str {
+        match self {
+            Self::Hook => "hook",
+            Self::Map => "map",
+        }
+    }
+
+    fn keeps_first_owned_param(self) -> bool {
+        matches!(self, Self::Map)
+    }
+}
+
+fn classify_param(ty: &Type, special: &SpecialTypePaths) -> syn::Result<ParamSource> {
     let ty = peel_type(ty);
 
     match ty {
@@ -61,7 +82,7 @@ fn classify_param(ty: &Type, special: &SpecialPaths) -> syn::Result<ParamKind> {
                 ));
             }
 
-            Ok(ParamKind::Owned)
+            Ok(ParamSource::ScopeTake)
         }
     }
 }
@@ -69,13 +90,13 @@ fn classify_param(ty: &Type, special: &SpecialPaths) -> syn::Result<ParamKind> {
 fn classify_ref_param(
     original_ty: &Type,
     r: &TypeReference,
-    special: &SpecialPaths,
-) -> syn::Result<ParamKind> {
+    special: &SpecialTypePaths,
+) -> syn::Result<ParamSource> {
     let inner = peel_type(&r.elem);
 
     if is_special_type(inner, &special.ctx) {
         return if r.mutability.is_some() {
-            Ok(ParamKind::Ctx)
+            Ok(ParamSource::PartsCtx)
         } else {
             Err(syn::Error::new(
                 original_ty.span(),
@@ -86,7 +107,7 @@ fn classify_ref_param(
 
     if is_special_type(inner, &special.scope) {
         return if r.mutability.is_some() {
-            Ok(ParamKind::Scope)
+            Ok(ParamSource::RequestScope)
         } else {
             Err(syn::Error::new(
                 original_ty.span(),
@@ -96,9 +117,9 @@ fn classify_ref_param(
     }
 
     if r.mutability.is_some() {
-        Ok(ParamKind::MutRef(inner.clone()))
+        Ok(ParamSource::ScopeMut(inner.clone()))
     } else {
-        Ok(ParamKind::Ref(inner.clone()))
+        Ok(ParamSource::ScopeRef(inner.clone()))
     }
 }
 
@@ -113,7 +134,7 @@ fn peel_type(mut ty: &Type) -> &Type {
 }
 
 /// Checks whether `ty` refers to the type at `expected` path.
-/// Derives the bare ident from `expected` itself — no separate string needed.
+/// Derives the bare ident from `expected` itself, so no separate string is needed.
 fn is_special_type(ty: &Type, expected: &Path) -> bool {
     let ty = peel_type(ty);
 
@@ -125,15 +146,20 @@ fn is_special_type(ty: &Type, expected: &Path) -> bool {
         return false;
     };
 
-    // Bare ident: user wrote just `PartsCtx` / `RequestScope` without path prefix.
-    // The ident is derived from the last segment of `expected`.
     let last_ident = &expected.segments.last().unwrap().ident;
-    if path.is_ident(last_ident) {
+    if is_bare_special_path(path, last_ident) {
         return true;
     }
 
-    // Full path: `apigate::PartsCtx`, `crate::PartsCtx`, etc.
+    // Full path: `apigate::PartsCtx`, `::apigate::PartsCtx`, or renamed crate path.
     path_eq_ignoring_args(path, expected)
+}
+
+fn is_bare_special_path(path: &Path, ident: &syn::Ident) -> bool {
+    path.leading_colon.is_none()
+        && path.segments.len() == 1
+        && path.segments[0].ident == *ident
+        && !matches!(path.segments[0].arguments, PathArguments::Parenthesized(_))
 }
 
 fn path_eq_ignoring_args(a: &Path, b: &Path) -> bool {
@@ -162,12 +188,12 @@ fn validate_plans(plans: &[ParamPlan], sig: &syn::Signature, macro_name: &str) -
     let mut s = BorrowSummary::default();
 
     for plan in plans {
-        match &plan.kind {
-            ParamKind::Ctx => s.seen_ctx += 1,
-            ParamKind::Scope => s.seen_scope += 1,
-            ParamKind::Ref(_) => s.immut_borrowed_from_scope += 1,
-            ParamKind::MutRef(_) => s.mut_borrowed_from_scope += 1,
-            ParamKind::Owned => {}
+        match &plan.source {
+            ParamSource::PartsCtx => s.seen_ctx += 1,
+            ParamSource::RequestScope => s.seen_scope += 1,
+            ParamSource::ScopeRef(_) => s.immut_borrowed_from_scope += 1,
+            ParamSource::ScopeMut(_) => s.mut_borrowed_from_scope += 1,
+            ParamSource::ScopeTake => {}
         }
     }
 
@@ -229,8 +255,8 @@ fn missing_from_scope_tokens(apigate: &TokenStream2, ty: &Type) -> TokenStream2 
 
 fn build_param_plans(
     f: &ItemFn,
-    special: &SpecialPaths,
-    keep_first_value: bool,
+    special: &SpecialTypePaths,
+    mode: ExpansionMode,
 ) -> syn::Result<(Vec<ParamPlan>, Option<FnArg>)> {
     let mut plans = Vec::new();
     let mut kept_param: Option<FnArg> = None;
@@ -246,15 +272,15 @@ fn build_param_plans(
 
         let pat = (*pt.pat).clone();
         let ty = (*pt.ty).clone();
-        let kind = classify_param(&ty, special)?;
+        let source = classify_param(&ty, special)?;
 
-        match &kind {
-            ParamKind::Owned if keep_first_value && !found_first_value => {
+        match &source {
+            ParamSource::ScopeTake if mode.keeps_first_owned_param() && !found_first_value => {
                 found_first_value = true;
                 kept_param = Some(param.clone());
             }
             _ => {
-                plans.push(ParamPlan { pat, ty, kind });
+                plans.push(ParamPlan { pat, ty, source });
             }
         }
     }
@@ -278,32 +304,32 @@ fn build_bindings(
         let pat = &plan.pat;
         let ty = &plan.ty;
 
-        match &plan.kind {
-            ParamKind::Ctx => {
+        match &plan.source {
+            ParamSource::PartsCtx => {
                 ctx_tokens.push(quote! {
                     let #pat: #ty = #ctx_ident;
                 });
             }
-            ParamKind::Scope => {
+            ParamSource::RequestScope => {
                 scope_tokens.push(quote! {
                     let #pat: #ty = #scope_ident;
                 });
             }
-            ParamKind::Owned => {
+            ParamSource::ScopeTake => {
                 let err = missing_from_scope_tokens(apigate, ty);
                 take_tokens.push(quote! {
                     let #pat: #ty = #scope_ident.take::<#ty>()
                         .ok_or_else(|| #err)?;
                 });
             }
-            ParamKind::Ref(inner_ty) => {
+            ParamSource::ScopeRef(inner_ty) => {
                 let err = missing_from_scope_tokens(apigate, inner_ty);
                 get_tokens.push(quote! {
                     let #pat: #ty = #scope_ident.get::<#inner_ty>()
                         .ok_or_else(|| #err)?;
                 });
             }
-            ParamKind::MutRef(inner_ty) => {
+            ParamSource::ScopeMut(inner_ty) => {
                 let err = missing_from_scope_tokens(apigate, inner_ty);
                 get_mut_tokens.push(quote! {
                     let #pat: #ty = #scope_ident.get_mut::<#inner_ty>()
@@ -334,17 +360,16 @@ fn build_bindings(
 /// Shared expansion for `#[apigate::hook]` and `#[apigate::map]`.
 ///
 /// Rewrites function signature to canonical form.
-/// - hook (`keep_first_value = false`): all value params extracted from scope
-/// - map  (`keep_first_value = true`):  first owned param kept as direct input,
-///   rest extracted from scope
+/// - hook: all owned params are extracted from scope
+/// - map: first owned param is kept as direct input, rest are extracted from scope
 pub(crate) fn expand_fn_params(
     input: TokenStream,
-    macro_name: &str,
-    keep_first_value: bool,
+    mode: ExpansionMode,
 ) -> syn::Result<TokenStream2> {
     let mut f = syn::parse::<ItemFn>(input)?;
     let apigate = apigate_crate_path()?;
-    let special = SpecialPaths::new(&apigate)?;
+    let special = SpecialTypePaths::new(&apigate)?;
+    let macro_name = mode.macro_name();
 
     if f.sig.asyncness.is_none() {
         return Err(syn::Error::new_spanned(
@@ -356,7 +381,14 @@ pub(crate) fn expand_fn_params(
     let ctx_ident = format_ident!("__apigate_ctx");
     let scope_ident = format_ident!("__apigate_scope");
 
-    let (plans, kept_param) = build_param_plans(&f, &special, keep_first_value)?;
+    let (plans, kept_param) = build_param_plans(&f, &special, mode)?;
+    if mode.keeps_first_owned_param() && kept_param.is_none() {
+        return Err(syn::Error::new_spanned(
+            &f.sig,
+            "#[apigate::map] requires owned input parameter",
+        ));
+    }
+
     validate_plans(&plans, &f.sig, macro_name)?;
 
     // Rewrite parameter list: [input,] ctx, scope

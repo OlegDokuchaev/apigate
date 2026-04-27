@@ -53,3 +53,33 @@ impl Parse for ServiceArgs {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_empty_service_args() {
+        let args: ServiceArgs = syn::parse_str("").unwrap();
+
+        assert!(args.name.is_none());
+        assert!(args.prefix.is_none());
+        assert!(args.policy.is_none());
+    }
+
+    #[test]
+    fn parses_all_service_args() {
+        let args: ServiceArgs =
+            syn::parse_str(r#"name = "sales", prefix = "/api/sales", policy = "sticky""#).unwrap();
+
+        assert_eq!(args.name.unwrap().value(), "sales");
+        assert_eq!(args.prefix.unwrap().value(), "/api/sales");
+        assert_eq!(args.policy.unwrap().value(), "sticky");
+    }
+
+    #[test]
+    fn rejects_duplicate_or_unknown_service_args() {
+        assert!(syn::parse_str::<ServiceArgs>(r#"name = "a", name = "b""#).is_err());
+        assert!(syn::parse_str::<ServiceArgs>(r#"unknown = "x""#).is_err());
+    }
+}

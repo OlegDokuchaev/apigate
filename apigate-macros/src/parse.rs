@@ -19,7 +19,7 @@ pub(crate) fn parse_assigned<T: Parse>(input: ParseStream<'_>) -> Result<T> {
     input.parse()
 }
 
-/// Parses `[path1, path2, ...]` — a bracketed, comma-separated list of paths.
+/// Parses `[path1, path2, ...]`, a bracketed, comma-separated list of paths.
 pub(crate) fn parse_bracketed_paths(input: ParseStream<'_>) -> Result<Vec<Path>> {
     let content;
     bracketed!(content in input);

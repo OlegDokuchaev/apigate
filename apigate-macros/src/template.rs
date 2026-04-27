@@ -30,7 +30,7 @@ pub(crate) enum RewriteTemplateError {
 }
 
 // ---------------------------------------------------------------------------
-// IR — intermediate representation between parsing and token emission
+// IR: intermediate representation between parsing and token emission.
 // ---------------------------------------------------------------------------
 
 enum SrcSegIr {
@@ -201,5 +201,86 @@ fn emit(apigate_path: &TokenStream2, ir: RewriteIr) -> CompiledTemplate {
         src_tokens,
         dst_tokens,
         static_len: ir.static_len,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quote::quote;
+
+    #[test]
+    fn compiles_rewrite_template_into_source_and_destination_tokens() {
+        let compiled = compile_rewrite_template(
+            &quote!(::apigate),
+            "/sales/{sale_id}/items/{item_id}",
+            "/internal/{item_id}/sales/{sale_id}",
+        )
+        .unwrap();
+
+        assert_eq!(compiled.src_tokens.len(), 4);
+        assert_eq!(compiled.dst_tokens.len(), 4);
+        assert_eq!(compiled.static_len, "/internal//sales/".len());
+
+        let dst = compiled
+            .dst_tokens
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(dst.contains("src_index : 1"));
+        assert!(dst.contains("src_index : 0"));
+    }
+
+    #[test]
+    fn rejects_invalid_route_parameters() {
+        let apigate = quote!(::apigate);
+
+        assert_eq!(
+            compile_rewrite_template(&apigate, "/sales/{}", "/internal")
+                .err()
+                .expect("empty route parameter"),
+            RewriteTemplateError::EmptyRouteParameter
+        );
+        assert_eq!(
+            compile_rewrite_template(&apigate, "/sales/{id}/{id}", "/internal")
+                .err()
+                .expect("duplicate route parameter"),
+            RewriteTemplateError::DuplicateRouteParameter {
+                name: "id".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_destination_template() {
+        let apigate = quote!(::apigate);
+
+        assert_eq!(
+            compile_rewrite_template(&apigate, "/sales/{id}", "/internal/{id")
+                .err()
+                .expect("unclosed destination parameter"),
+            RewriteTemplateError::UnclosedToParameter
+        );
+        assert_eq!(
+            compile_rewrite_template(&apigate, "/sales/{id}", "/internal/{}")
+                .err()
+                .expect("empty destination parameter"),
+            RewriteTemplateError::EmptyToParameter
+        );
+        assert_eq!(
+            compile_rewrite_template(&apigate, "/sales/{id}", "/internal/{missing}")
+                .err()
+                .expect("unknown destination parameter"),
+            RewriteTemplateError::UnknownToParameter {
+                name: "missing".to_owned()
+            }
+        );
+        assert_eq!(
+            compile_rewrite_template(&apigate, "/sales/{id}", "/internal/{id}}")
+                .err()
+                .expect("unmatched destination close brace"),
+            RewriteTemplateError::UnmatchedToCloseBrace
+        );
     }
 }

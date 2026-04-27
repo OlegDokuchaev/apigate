@@ -18,7 +18,7 @@ use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
 use syn::{Item, ItemMod, LitStr, parse_macro_input};
 
-use expand::expand_fn_params;
+use expand::{ExpansionMode, expand_fn_params};
 use route::expand_route_from_fn;
 use service::ServiceArgs;
 
@@ -68,11 +68,11 @@ fn expand_service(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     let mut generated_items = Vec::new();
 
     for item in items.iter_mut() {
-        if let Item::Fn(f) = item {
-            if let Some(extracted) = expand_route_from_fn(&apigate_path, f)? {
-                route_defs.push(extracted.route_def);
-                generated_items.extend(extracted.generated_items);
-            }
+        if let Item::Fn(f) = item
+            && let Some(extracted) = expand_route_from_fn(&apigate_path, f)?
+        {
+            route_defs.push(extracted.route_def);
+            generated_items.extend(extracted.generated_items);
         }
     }
 
@@ -118,7 +118,7 @@ fn expand_service(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 /// cheaply.
 #[proc_macro_attribute]
 pub fn hook(_args: TokenStream, input: TokenStream) -> TokenStream {
-    expand_fn_params(input, "hook", false)
+    expand_fn_params(input, ExpansionMode::Hook)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -131,7 +131,7 @@ pub fn hook(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// `RequestScope` or request parts.
 #[proc_macro_attribute]
 pub fn map(_args: TokenStream, input: TokenStream) -> TokenStream {
-    expand_fn_params(input, "map", true)
+    expand_fn_params(input, ExpansionMode::Map)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

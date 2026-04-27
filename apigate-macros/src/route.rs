@@ -69,19 +69,14 @@ impl MethodKind {
 // ---------------------------------------------------------------------------
 
 /// Which request body extractor the route uses (if any).
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) enum DataKind {
+    #[default]
     None,
     Query(Type),
     Json(Type),
     Form(Type),
     Multipart,
-}
-
-impl Default for DataKind {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 impl DataKind {
@@ -371,9 +366,9 @@ fn find_route_attr(f: &ItemFn) -> Result<Option<MatchedRouteAttr>> {
 }
 
 /// Generates a `RewriteSpec` token stream based on the `to` attribute:
-/// - `None` → `StripPrefix`
-/// - static string → `Static`
-/// - string with `{param}` → inlines a `RewriteTemplate` (const-promoted to `'static`)
+/// - `None` maps to `StripPrefix`.
+/// - A static string maps to `Static`.
+/// - A string with `{param}` inlines a `RewriteTemplate` const-promoted to `'static`.
 fn build_rewrite_spec(
     apigate_path: &TokenStream2,
     path: &LitStr,
@@ -400,5 +395,47 @@ fn build_rewrite_spec(
                 })),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_route_args_with_hooks_map_and_json_body() {
+        let args: RouteArgs = syn::parse_str(
+            r#""/items", to = "/internal", policy = "sticky", before = [auth, trace], json = Input, map = remap"#,
+        )
+        .unwrap();
+
+        assert_eq!(args.path.value(), "/items");
+        assert_eq!(args.to.unwrap().value(), "/internal");
+        assert_eq!(args.policy.unwrap().value(), "sticky");
+        assert_eq!(args.before.len(), 2);
+        assert_eq!(args.map.unwrap().segments.last().unwrap().ident, "remap");
+        assert!(matches!(args.data, DataKind::Json(_)));
+    }
+
+    #[test]
+    fn parses_route_args_with_path_type_and_multipart_flag() {
+        let args: RouteArgs = syn::parse_str(r#""/{id}", path = PathParams, multipart"#).unwrap();
+
+        assert_eq!(args.path.value(), "/{id}");
+        assert!(args.path_type.is_some());
+        assert!(matches!(args.data, DataKind::Multipart));
+    }
+
+    #[test]
+    fn rejects_duplicate_route_fields_or_unknown_arguments() {
+        assert!(syn::parse_str::<RouteArgs>(r#""/items", to = "/a", to = "/b""#).is_err());
+        assert!(syn::parse_str::<RouteArgs>(r#""/items", query = A, json = B"#).is_err());
+        assert!(syn::parse_str::<RouteArgs>(r#""/items", unknown = A"#).is_err());
+    }
+
+    #[test]
+    fn rejects_map_without_supported_data_kind() {
+        assert!(syn::parse_str::<RouteArgs>(r#""/items", map = remap"#).is_err());
+        assert!(syn::parse_str::<RouteArgs>(r#""/items", multipart, map = remap"#).is_err());
     }
 }

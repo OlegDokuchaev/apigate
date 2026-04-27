@@ -107,7 +107,7 @@ fn build_body_phase(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// `scope.take_body().ok_or_else(...)` — returns `Result<Body>`.
+/// `scope.take_body().ok_or_else(...)` returns `Result<Body>`.
 fn take_body_expr(apigate_path: &TokenStream2) -> TokenStream2 {
     quote! {
         scope.take_body()
@@ -115,7 +115,7 @@ fn take_body_expr(apigate_path: &TokenStream2) -> TokenStream2 {
     }
 }
 
-/// `let body = scope.take_body().ok_or_else(...)?;` — unwraps into `Body`.
+/// `let body = scope.take_body().ok_or_else(...)?;` unwraps into `Body`.
 fn take_body_let(apigate_path: &TokenStream2) -> TokenStream2 {
     let take = take_body_expr(apigate_path);
     quote!(let body = #take?;)
