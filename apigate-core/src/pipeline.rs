@@ -74,7 +74,7 @@ impl<'a> RequestScope<'a> {
 // ---------------------------------------------------------------------------
 
 /// Single function that orchestrates all request processing:
-/// parse path params → before hooks → validate/parse body → map → return body.
+/// parse path params, run before hooks, validate/parse body, map, and return body.
 pub type PipelineFn = for<'a> fn(PartsCtx<'a>, RequestScope<'a>) -> PipelineFuture<'a>;
 /// Boxed future returned by a generated pipeline.
 pub type PipelineFuture<'a> = Pin<Box<dyn Future<Output = PipelineResult> + Send + 'a>>;
@@ -85,3 +85,76 @@ pub type PipelineResult = Result<Body, ApigateError>;
 pub type HookResult = Result<(), ApigateError>;
 /// Result type returned by `#[apigate::map]` functions.
 pub type MapResult<T> = Result<T, ApigateError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct SharedState(&'static str);
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct LocalState(&'static str);
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct Overridden(&'static str);
+
+    #[tokio::test]
+    async fn request_scope_body_can_be_taken_once() {
+        let shared = Extensions::new();
+        let mut scope = RequestScope::new(&shared, Body::from("hello"), 1024);
+
+        assert_eq!(scope.body_limit(), 1024);
+
+        let body = scope.take_body().expect("body is present");
+        let bytes = to_bytes(body, 1024).await.unwrap();
+        assert_eq!(&bytes[..], b"hello");
+
+        assert!(scope.take_body().is_none());
+    }
+
+    #[test]
+    fn request_scope_get_reads_local_before_shared() {
+        let mut shared = Extensions::new();
+        shared.insert(SharedState("shared"));
+        shared.insert(Overridden("shared"));
+
+        let mut scope = RequestScope::new(&shared, Body::empty(), 1024);
+        scope.insert(LocalState("local"));
+        scope.insert(Overridden("local"));
+
+        assert_eq!(scope.get::<SharedState>(), Some(&SharedState("shared")));
+        assert_eq!(scope.get::<LocalState>(), Some(&LocalState("local")));
+        assert_eq!(scope.get::<Overridden>(), Some(&Overridden("local")));
+    }
+
+    #[test]
+    fn request_scope_get_mut_only_targets_local_values() {
+        let mut shared = Extensions::new();
+        shared.insert(SharedState("shared"));
+
+        let mut scope = RequestScope::new(&shared, Body::empty(), 1024);
+        scope.insert(LocalState("local"));
+
+        scope.get_mut::<LocalState>().unwrap().0 = "changed";
+
+        assert_eq!(scope.get::<LocalState>(), Some(&LocalState("changed")));
+        assert!(scope.get_mut::<SharedState>().is_none());
+    }
+
+    #[test]
+    fn request_scope_take_removes_local_or_clones_shared() {
+        let mut shared = Extensions::new();
+        shared.insert(SharedState("shared"));
+
+        let mut scope = RequestScope::new(&shared, Body::empty(), 1024);
+        scope.insert(LocalState("local"));
+
+        assert_eq!(scope.take::<LocalState>(), Some(LocalState("local")));
+        assert_eq!(scope.take::<LocalState>(), None);
+
+        assert_eq!(scope.take::<SharedState>(), Some(SharedState("shared")));
+        assert_eq!(scope.take::<SharedState>(), Some(SharedState("shared")));
+    }
+}

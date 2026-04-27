@@ -76,3 +76,75 @@ impl Default for Policy {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::{BackendPool, BaseUri};
+    use crate::balancing::BalanceCtx;
+    use crate::routing::{CandidateSet, RouteCtx};
+
+    fn pool() -> BackendPool {
+        BackendPool::new(vec![
+            BaseUri::parse("http://127.0.0.1:8081").unwrap(),
+            BaseUri::parse("http://127.0.0.1:8082").unwrap(),
+        ])
+    }
+
+    fn route_ctx<'a>(
+        route_path: &'a str,
+        prefix: &'a str,
+        uri: &'a http::Uri,
+        headers: &'a http::HeaderMap,
+    ) -> RouteCtx<'a> {
+        RouteCtx {
+            service: "sales",
+            prefix,
+            route_path,
+            method: &http::Method::GET,
+            uri,
+            headers,
+        }
+    }
+
+    fn pick(policy: &Policy, pool: &BackendPool, candidates: CandidateSet) -> Option<usize> {
+        policy.balancer.pick(&BalanceCtx {
+            service: "sales",
+            affinity: None,
+            pool,
+            candidates,
+        })
+    }
+
+    #[test]
+    fn built_in_policies_select_from_available_backends() {
+        let pool = pool();
+
+        assert!(pick(&Policy::new(), &pool, CandidateSet::All).is_some());
+        assert!(pick(&Policy::default(), &pool, CandidateSet::All).is_some());
+        assert!(pick(&Policy::round_robin(), &pool, CandidateSet::All).is_some());
+        assert!(pick(&Policy::least_request(), &pool, CandidateSet::All).is_some());
+        assert!(pick(&Policy::least_time(), &pool, CandidateSet::All).is_some());
+        assert!(pick(&Policy::consistent_hash(), &pool, CandidateSet::All).is_some());
+    }
+
+    #[test]
+    fn sticky_policy_sugars_extract_expected_affinity_keys() {
+        let pool = pool();
+        let uri: http::Uri = "/sales/items/42".parse().unwrap();
+        let mut headers = http::HeaderMap::new();
+        headers.insert("x-user-id", "user-7".parse().unwrap());
+
+        let header_policy = Policy::header_sticky("x-user-id");
+        let header_decision = header_policy
+            .router
+            .route(&route_ctx("/items/{id}", "/sales", &uri, &headers), &pool);
+        assert_eq!(header_decision.affinity.unwrap().as_str(), "user-7");
+
+        let path_policy = Policy::path_sticky("id");
+        let path_decision = path_policy
+            .router
+            .route(&route_ctx("/items/{id}", "/sales", &uri, &headers), &pool);
+        assert_eq!(path_decision.affinity.unwrap().as_str(), "42");
+    }
+}

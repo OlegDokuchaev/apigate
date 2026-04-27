@@ -114,3 +114,105 @@ impl ApigatePipelineError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_pipeline_errors_expose_public_message_details_status_and_code() {
+        let cases = [
+            (
+                ApigatePipelineError::MissingFromScope("AppState"),
+                "missing value in request scope",
+                Some("AppState"),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "missing_from_scope",
+            ),
+            (
+                ApigatePipelineError::RequestBodyAlreadyConsumed,
+                "request body already consumed",
+                None,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "request_body_already_consumed",
+            ),
+            (
+                ApigatePipelineError::RequestBodyTooLarge("limit exceeded".to_string()),
+                "request body is too large",
+                Some("limit exceeded"),
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "request_body_too_large",
+            ),
+            (
+                ApigatePipelineError::InvalidJsonBody("line 1".to_string()),
+                "invalid json body",
+                Some("line 1"),
+                StatusCode::BAD_REQUEST,
+                "invalid_json_body",
+            ),
+            (
+                ApigatePipelineError::FailedSerializeMappedJson("field".to_string()),
+                "failed to serialize mapped json",
+                Some("field"),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "serialize_mapped_json_failed",
+            ),
+            (
+                ApigatePipelineError::InvalidQuery("bad query".to_string()),
+                "invalid query",
+                Some("bad query"),
+                StatusCode::BAD_REQUEST,
+                "invalid_query",
+            ),
+            (
+                ApigatePipelineError::FailedSerializeMappedQuery("bad output".to_string()),
+                "failed to serialize mapped query",
+                Some("bad output"),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "serialize_mapped_query_failed",
+            ),
+            (
+                ApigatePipelineError::FailedRebuildUri("invalid uri".to_string()),
+                "failed to rebuild uri",
+                Some("invalid uri"),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "rebuild_uri_failed",
+            ),
+            (
+                ApigatePipelineError::ExpectedFormUrlEncoded,
+                "expected application/x-www-form-urlencoded",
+                None,
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "expected_form_urlencoded",
+            ),
+            (
+                ApigatePipelineError::InvalidFormQuery("bad form query".to_string()),
+                "invalid form query",
+                Some("bad form query"),
+                StatusCode::BAD_REQUEST,
+                "invalid_form_query",
+            ),
+            (
+                ApigatePipelineError::FailedSerializeMappedForm("bad form output".to_string()),
+                "failed to serialize mapped form",
+                Some("bad form output"),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "serialize_mapped_form_failed",
+            ),
+            (
+                ApigatePipelineError::InvalidFormBody("bad form body".to_string()),
+                "invalid form body",
+                Some("bad form body"),
+                StatusCode::BAD_REQUEST,
+                "invalid_form_body",
+            ),
+        ];
+
+        for (error, message, details, status, code) in cases {
+            assert_eq!(error.user_message(), message);
+            assert_eq!(error.debug_details(), details);
+            assert_eq!(error.status_code(), status);
+            assert_eq!(error.code(), code);
+        }
+    }
+}

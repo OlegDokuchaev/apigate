@@ -75,3 +75,116 @@ pub trait RouteStrategy: Send + Sync + 'static {
     /// Produces a routing decision for the request.
     fn route<'a>(&self, ctx: &RouteCtx<'a>, pool: &'a BackendPool) -> RoutingDecision<'a>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::{BackendPool, BaseUri};
+
+    fn pool() -> BackendPool {
+        BackendPool::new(vec![
+            BaseUri::parse("http://127.0.0.1:8081").unwrap(),
+            BaseUri::parse("http://127.0.0.1:8082").unwrap(),
+        ])
+    }
+
+    fn ctx<'a>(
+        route_path: &'a str,
+        prefix: &'a str,
+        uri: &'a http::Uri,
+        headers: &'a http::HeaderMap,
+    ) -> RouteCtx<'a> {
+        RouteCtx {
+            service: "sales",
+            prefix,
+            route_path,
+            method: &http::Method::GET,
+            uri,
+            headers,
+        }
+    }
+
+    #[test]
+    fn no_route_key_leaves_all_backends_eligible() {
+        let uri = "/sales/123".parse().unwrap();
+        let headers = http::HeaderMap::new();
+        let pool = pool();
+        let decision = NoRouteKey.route(&ctx("/{id}", "/sales", &uri, &headers), &pool);
+
+        assert!(decision.affinity.is_none());
+        assert!(matches!(decision.candidates, CandidateSet::All));
+    }
+
+    #[test]
+    fn header_sticky_uses_utf8_header_as_affinity() {
+        let uri = "/sales".parse().unwrap();
+        let mut headers = http::HeaderMap::new();
+        headers.insert("x-user-id", "user-1".parse().unwrap());
+        let pool = pool();
+
+        let decision =
+            HeaderSticky::new("x-user-id").route(&ctx("/", "/sales", &uri, &headers), &pool);
+
+        assert_eq!(
+            decision.affinity.as_ref().map(AffinityKey::as_str),
+            Some("user-1")
+        );
+        assert!(matches!(decision.candidates, CandidateSet::All));
+    }
+
+    #[test]
+    fn header_sticky_ignores_missing_or_non_utf8_header() {
+        let uri = "/sales".parse().unwrap();
+        let mut headers = http::HeaderMap::new();
+        headers.insert("x-user-id", http::HeaderValue::from_bytes(b"\xff").unwrap());
+        let pool = pool();
+
+        let decision =
+            HeaderSticky::new("x-missing").route(&ctx("/", "/sales", &uri, &headers), &pool);
+        assert!(decision.affinity.is_none());
+
+        let decision =
+            HeaderSticky::new("x-user-id").route(&ctx("/", "/sales", &uri, &headers), &pool);
+        assert!(decision.affinity.is_none());
+    }
+
+    #[test]
+    fn path_sticky_extracts_named_parameter_after_prefix() {
+        let uri = "/api/sales/111/items/222".parse().unwrap();
+        let headers = http::HeaderMap::new();
+        let pool = pool();
+
+        let decision = PathSticky::new("item_id").route(
+            &ctx("/{sale_id}/items/{item_id}", "/api/sales", &uri, &headers),
+            &pool,
+        );
+
+        assert_eq!(
+            decision.affinity.as_ref().map(AffinityKey::as_str),
+            Some("222")
+        );
+        assert!(matches!(decision.candidates, CandidateSet::All));
+    }
+
+    #[test]
+    fn path_sticky_returns_none_when_parameter_is_absent() {
+        let uri = "/api/sales/111".parse().unwrap();
+        let headers = http::HeaderMap::new();
+        let pool = pool();
+
+        let decision = PathSticky::new("item_id")
+            .route(&ctx("/{sale_id}", "/api/sales", &uri, &headers), &pool);
+
+        assert!(decision.affinity.is_none());
+    }
+
+    #[test]
+    fn affinity_key_can_be_borrowed_or_owned() {
+        let borrowed = AffinityKey::borrowed("abc");
+        let owned = AffinityKey::owned("abc");
+
+        assert_eq!(borrowed, owned);
+        assert_eq!(borrowed.as_str(), "abc");
+        assert_eq!(owned.into_owned(), "abc");
+    }
+}

@@ -168,3 +168,137 @@ impl IntoResponse for ApigateError {
         self.into_response_with(renderer)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use serde::Serialize;
+
+    #[test]
+    fn framework_constructor_sugars_preserve_status_message_and_log_status() {
+        let cases = [
+            (
+                ApigateError::bad_request("bad"),
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "bad",
+            ),
+            (
+                ApigateError::unauthorized("missing"),
+                StatusCode::UNAUTHORIZED,
+                "unauthorized",
+                "missing",
+            ),
+            (
+                ApigateError::forbidden("no"),
+                StatusCode::FORBIDDEN,
+                "forbidden",
+                "no",
+            ),
+            (
+                ApigateError::payload_too_large("large"),
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "payload_too_large",
+                "large",
+            ),
+            (
+                ApigateError::unsupported_media_type("media"),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupported_media_type",
+                "media",
+            ),
+            (
+                ApigateError::bad_gateway("upstream"),
+                StatusCode::BAD_GATEWAY,
+                "bad_gateway",
+                "upstream",
+            ),
+            (
+                ApigateError::gateway_timeout("slow"),
+                StatusCode::GATEWAY_TIMEOUT,
+                "gateway_timeout",
+                "slow",
+            ),
+            (
+                ApigateError::internal("boom"),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+                "boom",
+            ),
+            (
+                ApigateError::new(StatusCode::TOO_MANY_REQUESTS, "rate"),
+                StatusCode::TOO_MANY_REQUESTS,
+                "client_error",
+                "rate",
+            ),
+            (
+                ApigateError::new(StatusCode::SERVICE_UNAVAILABLE, "down"),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server_error",
+                "down",
+            ),
+        ];
+
+        for (error, status, code, message) in cases {
+            let framework = error.framework_error().unwrap();
+            assert_eq!(framework.status_code(), status);
+            assert_eq!(framework.code(), code);
+            assert_eq!(framework.user_message(), message);
+            assert_eq!(error.status_code_for_log(), status);
+        }
+    }
+
+    #[tokio::test]
+    async fn custom_response_bypasses_framework_renderer() {
+        let error = ApigateError::from_response((StatusCode::ACCEPTED, "custom"));
+
+        assert!(error.framework_error().is_none());
+        assert_eq!(error.status_code_for_log(), StatusCode::ACCEPTED);
+
+        let response = error.into_response_with(&default_error_renderer);
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.as_ref(), b"custom");
+    }
+
+    #[tokio::test]
+    async fn json_constructor_sugars_return_custom_json_statuses() {
+        #[derive(Serialize)]
+        struct Body {
+            code: &'static str,
+        }
+
+        let cases = [
+            (
+                ApigateError::bad_request_json(Body { code: "bad" }),
+                StatusCode::BAD_REQUEST,
+                r#"{"code":"bad"}"#,
+            ),
+            (
+                ApigateError::unauthorized_json(Body { code: "auth" }),
+                StatusCode::UNAUTHORIZED,
+                r#"{"code":"auth"}"#,
+            ),
+            (
+                ApigateError::forbidden_json(Body { code: "forbidden" }),
+                StatusCode::FORBIDDEN,
+                r#"{"code":"forbidden"}"#,
+            ),
+        ];
+
+        for (error, status, expected_body) in cases {
+            assert!(error.framework_error().is_none());
+            assert_eq!(error.status_code_for_log(), status);
+
+            let response = error.into_response_with(&default_error_renderer);
+            assert_eq!(response.status(), status);
+            assert_eq!(
+                response.headers().get(http::header::CONTENT_TYPE).unwrap(),
+                "application/json"
+            );
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(body.as_ref(), expected_body.as_bytes());
+        }
+    }
+}

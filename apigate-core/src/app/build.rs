@@ -4,19 +4,14 @@ use std::time::Duration;
 
 use axum::routing;
 use axum::{Extension, Router};
-use hyper_util::client::legacy::Client;
-use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::rt::{TokioExecutor, TokioTimer};
 
 use super::dispatch::proxy_handler;
-use super::{App, AppBuilder, Inner};
+use super::{App, AppBuilder, Inner, UpstreamConfig};
 use crate::backend::{BackendPool, BaseUri};
-use crate::balancing::RoundRobin;
-use crate::error::{ApigateBuildError, ApigateFrameworkError, default_error_renderer};
-use crate::observability::{RuntimeEvent, default_tracing_observer};
+use crate::error::{default_error_renderer, ApigateBuildError, ApigateFrameworkError};
+use crate::observability::{default_tracing_observer, RuntimeEvent};
 use crate::policy::Policy;
 use crate::route::{FixedRewrite, Rewrite, RewriteSpec, RouteMeta};
-use crate::routing::NoRouteKey;
 use crate::{Method, Routes};
 
 impl AppBuilder {
@@ -27,10 +22,9 @@ impl AppBuilder {
             backends: HashMap::new(),
             mounted: Vec::new(),
             policies: HashMap::new(),
-            default_policy: Arc::new(Policy::new().router(NoRouteKey).balancer(RoundRobin::new())),
+            default_policy: Arc::new(Policy::round_robin()),
             request_timeout: Duration::from_secs(30),
-            connect_timeout: Duration::from_secs(5),
-            pool_idle_timeout: Duration::from_secs(90),
+            upstream: UpstreamConfig::new(),
             map_body_limit: 2 * 1024 * 1024,
             state: http::Extensions::new(),
             error_renderer: Arc::new(default_error_renderer),
@@ -75,13 +69,27 @@ impl AppBuilder {
 
     /// Sets the TCP connect timeout for upstream connections.
     pub fn connect_timeout(mut self, d: Duration) -> Self {
-        self.connect_timeout = d;
+        self.upstream.connect_timeout = d;
         self
     }
 
     /// Sets how long idle upstream connections are kept in the client pool.
     pub fn pool_idle_timeout(mut self, d: Duration) -> Self {
-        self.pool_idle_timeout = d;
+        self.upstream.pool_idle_timeout = d;
+        self
+    }
+
+    /// Sets the maximum idle upstream connections kept per host.
+    ///
+    /// The default is `usize::MAX`, matching hyper-util's default.
+    pub fn pool_max_idle_per_host(mut self, max_idle: usize) -> Self {
+        self.upstream.pool_max_idle_per_host = max_idle;
+        self
+    }
+
+    /// Replaces the upstream client and TCP socket configuration.
+    pub fn upstream(mut self, config: UpstreamConfig) -> Self {
+        self.upstream = config;
         self
     }
 
@@ -159,15 +167,7 @@ impl AppBuilder {
     /// Builds the gateway application.
     pub fn build(self) -> Result<App, ApigateBuildError> {
         // HTTP client
-        let mut connector = HttpConnector::new();
-        connector.set_nodelay(true);
-        connector.set_connect_timeout(Some(self.connect_timeout));
-        connector.set_keepalive(Some(self.pool_idle_timeout));
-
-        let client = Client::builder(TokioExecutor::new())
-            .pool_timer(TokioTimer::new())
-            .pool_idle_timeout(self.pool_idle_timeout)
-            .build(connector);
+        let client = self.upstream.build_client();
 
         // backend pools
         let mut pools: HashMap<String, Arc<BackendPool>> = HashMap::new();
@@ -306,5 +306,123 @@ fn method_router(method: Method) -> routing::MethodRouter<Arc<Inner>> {
         Method::Patch => routing::patch(proxy_handler),
         Method::Head => routing::head(proxy_handler),
         Method::Options => routing::options(proxy_handler),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{App, RewriteSpec, RouteDef};
+
+    static EMPTY_ROUTES: &[RouteDef] = &[];
+    static ROUTES_WITH_POLICY: &[RouteDef] = &[RouteDef {
+        method: Method::Get,
+        path: "/items",
+        rewrite: RewriteSpec::StripPrefix,
+        policy: Some("missing"),
+        pipeline: None,
+    }];
+
+    fn routes(
+        service: &'static str,
+        policy: Option<&'static str>,
+        routes: &'static [RouteDef],
+    ) -> Routes {
+        Routes {
+            service,
+            prefix: "/api",
+            policy,
+            routes,
+        }
+    }
+
+    #[test]
+    fn join_normalizes_prefix_and_path_separator() {
+        assert_eq!(join("/sales", "/items"), "/sales/items");
+        assert_eq!(join("/sales/", "/items"), "/sales/items");
+        assert_eq!(join("/sales", "items"), "/sales/items");
+        assert_eq!(join("", "/items"), "/items");
+        assert_eq!(join("/", "/items"), "/items");
+    }
+
+    #[test]
+    fn build_reports_invalid_backend_uri() {
+        let err = match App::builder()
+            .backend("sales", ["not a valid uri"])
+            .mount(routes("sales", None, EMPTY_ROUTES))
+            .build()
+        {
+            Ok(_) => panic!("invalid backend URI must fail"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, ApigateBuildError::InvalidBackendUri { .. }));
+    }
+
+    #[test]
+    fn build_reports_missing_backend_for_mounted_service() {
+        let err = match App::builder()
+            .mount(routes("sales", None, EMPTY_ROUTES))
+            .build()
+        {
+            Ok(_) => panic!("missing backend must fail"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(
+            err,
+            ApigateBuildError::BackendNotRegistered { service: "sales" }
+        ));
+    }
+
+    #[test]
+    fn build_reports_unknown_route_policy() {
+        let err = match App::builder()
+            .backend("sales", ["http://127.0.0.1:8081"])
+            .mount(routes("sales", None, ROUTES_WITH_POLICY))
+            .build()
+        {
+            Ok(_) => panic!("unknown policy must fail"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(
+            err,
+            ApigateBuildError::PolicyNotRegistered { name: "missing" }
+        ));
+    }
+
+    #[test]
+    fn mount_service_registers_backends_and_routes_together() {
+        let app = App::builder()
+            .mount_service(
+                routes("sales", None, EMPTY_ROUTES),
+                ["http://127.0.0.1:8081"],
+            )
+            .build();
+
+        assert!(app.is_ok());
+    }
+
+    #[test]
+    fn app_builder_shortcuts_update_upstream_config() {
+        let builder = App::builder()
+            .connect_timeout(Duration::from_secs(3))
+            .pool_idle_timeout(Duration::from_secs(60))
+            .pool_max_idle_per_host(128);
+
+        assert_eq!(builder.upstream.connect_timeout, Duration::from_secs(3));
+        assert_eq!(builder.upstream.pool_idle_timeout, Duration::from_secs(60));
+        assert_eq!(builder.upstream.pool_max_idle_per_host, 128);
+    }
+
+    #[test]
+    fn upstream_replaces_upstream_config() {
+        let builder = App::builder()
+            .connect_timeout(Duration::from_secs(3))
+            .upstream(UpstreamConfig::default().connect_timeout(Duration::from_secs(10)));
+
+        assert_eq!(builder.upstream.connect_timeout, Duration::from_secs(10));
+        assert_eq!(builder.upstream.pool_idle_timeout, Duration::from_secs(90));
     }
 }

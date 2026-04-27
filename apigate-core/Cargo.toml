@@ -1,8 +1,9 @@
 [package]
 name = "apigate-core"
-description = "Core runtime for apigate — routing, proxying, load balancing, and request context"
+description = "Core runtime for apigate: routing, proxying, load balancing, and request context"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
@@ -13,9 +14,14 @@ categories = ["web-programming::http-server", "network-programming"]
 [dependencies]
 axum = { version = "0.8", features = ["tokio", "http1", "http2"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
-hyper-util = { version = "0.1", features = ["tokio", "client", "client-legacy"] }
+hyper-util = { version = "0.1", features = ["tokio", "client", "client-legacy", "http1", "http2"] }
 http = "1"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 smallvec = "1"
+socket2 = { version = "0.6", features = ["all"] }
 thiserror = "2"
 tracing = "0.1"
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+tracing-subscriber = { version = "0.3", features = ["fmt"] }

@@ -118,3 +118,160 @@ pub trait Balancer: Send + Sync + 'static {
     /// Called after the request succeeds or fails.
     fn on_result(&self, _event: &ResultEvent) {}
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    use crate::backend::{BackendPool, BaseUri};
+    use crate::routing::{AffinityKey, CandidateSet};
+
+    fn pool() -> BackendPool {
+        BackendPool::new(vec![
+            BaseUri::parse("http://127.0.0.1:8081").unwrap(),
+            BaseUri::parse("http://127.0.0.1:8082").unwrap(),
+            BaseUri::parse("http://127.0.0.1:8083").unwrap(),
+        ])
+    }
+
+    fn ctx<'a>(
+        pool: &'a BackendPool,
+        candidates: CandidateSet<'a>,
+        affinity: Option<&'a AffinityKey<'a>>,
+    ) -> BalanceCtx<'a> {
+        BalanceCtx {
+            service: "sales",
+            affinity,
+            pool,
+            candidates,
+        }
+    }
+
+    #[test]
+    fn balance_ctx_resolves_candidate_sets() {
+        let pool = pool();
+        let all = ctx(&pool, CandidateSet::All, None);
+
+        assert_eq!(all.candidate_len(), 3);
+        assert_eq!(all.candidate_index(2), Some(2));
+        assert_eq!(all.candidate_index(3), None);
+        assert_eq!(all.candidate_backend(1).unwrap().index, 1);
+        assert!(all.is_candidate(2));
+        assert!(!all.is_candidate(3));
+
+        let indices = [2, 0];
+        let filtered = ctx(&pool, CandidateSet::Indices(&indices), None);
+
+        assert_eq!(filtered.candidate_len(), 2);
+        assert_eq!(filtered.candidate_index(0), Some(2));
+        assert_eq!(filtered.candidate_index(1), Some(0));
+        assert_eq!(filtered.candidate_index(2), None);
+        assert!(filtered.is_candidate(0));
+        assert!(!filtered.is_candidate(1));
+    }
+
+    #[test]
+    fn round_robin_cycles_over_candidates() {
+        let pool = pool();
+        let balancer = RoundRobin::new();
+        let candidates = [2, 0];
+        let ctx = ctx(&pool, CandidateSet::Indices(&candidates), None);
+
+        assert_eq!(balancer.pick(&ctx), Some(2));
+        assert_eq!(balancer.pick(&ctx), Some(0));
+        assert_eq!(balancer.pick(&ctx), Some(2));
+    }
+
+    #[test]
+    fn balancers_return_none_for_empty_candidate_sets() {
+        let pool = pool();
+        let empty = [];
+        let ctx = ctx(&pool, CandidateSet::Indices(&empty), None);
+
+        assert_eq!(RoundRobin::new().pick(&ctx), None);
+        assert_eq!(ConsistentHash::new().pick(&ctx), None);
+        assert_eq!(LeastRequest::new().pick(&ctx), None);
+        assert_eq!(LeastTime::new().pick(&ctx), None);
+    }
+
+    #[test]
+    fn consistent_hash_is_stable_for_same_affinity_and_respects_candidates() {
+        let pool = pool();
+        let balancer = ConsistentHash::new();
+        let key = AffinityKey::borrowed("user-1");
+        let candidates = [2, 0];
+        let ctx = ctx(&pool, CandidateSet::Indices(&candidates), Some(&key));
+
+        let first = balancer.pick(&ctx).unwrap();
+        for _ in 0..10 {
+            assert_eq!(balancer.pick(&ctx), Some(first));
+        }
+        assert!(candidates.contains(&first));
+    }
+
+    #[test]
+    fn consistent_hash_without_affinity_falls_back_to_round_robin() {
+        let pool = pool();
+        let balancer = ConsistentHash::new();
+        let candidates = [1, 2];
+        let ctx = ctx(&pool, CandidateSet::Indices(&candidates), None);
+
+        assert_eq!(balancer.pick(&ctx), Some(1));
+        assert_eq!(balancer.pick(&ctx), Some(2));
+        assert_eq!(balancer.pick(&ctx), Some(1));
+    }
+
+    #[test]
+    fn least_request_prefers_backend_with_fewer_in_flight_requests() {
+        let pool = pool();
+        let balancer = LeastRequest::new();
+        let ctx = ctx(&pool, CandidateSet::All, None);
+
+        assert_eq!(balancer.pick(&ctx), Some(0));
+        balancer.on_start(&StartEvent {
+            service: "sales",
+            backend_index: 0,
+        });
+
+        assert_eq!(balancer.pick(&ctx), Some(1));
+
+        balancer.on_result(&ResultEvent {
+            service: "sales",
+            backend_index: 0,
+            status: Some(http::StatusCode::OK),
+            error: None,
+            head_latency: Duration::from_millis(1),
+        });
+
+        assert_eq!(balancer.pick(&ctx), Some(2));
+    }
+
+    #[test]
+    fn least_time_prefers_unobserved_or_lower_latency_backend() {
+        let pool = pool();
+        let balancer = LeastTime::new();
+        let ctx = ctx(&pool, CandidateSet::All, None);
+
+        assert_eq!(balancer.pick(&ctx), Some(0));
+        balancer.on_result(&ResultEvent {
+            service: "sales",
+            backend_index: 0,
+            status: Some(http::StatusCode::OK),
+            error: None,
+            head_latency: Duration::from_millis(50),
+        });
+
+        assert_eq!(balancer.pick(&ctx), Some(1));
+
+        balancer.on_result(&ResultEvent {
+            service: "sales",
+            backend_index: 1,
+            status: None,
+            error: Some(ProxyErrorKind::Timeout),
+            head_latency: Duration::from_millis(500),
+        });
+
+        assert_eq!(balancer.pick(&ctx), Some(2));
+    }
+}

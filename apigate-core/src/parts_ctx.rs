@@ -132,3 +132,82 @@ impl<'a> PartsCtx<'a> {
             .map_err(|_| ApigateError::from(ApigateCoreError::InvalidPathParameters))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::response::IntoResponse;
+    use http::{Method, Request, StatusCode};
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct ExtensionValue(&'static str);
+
+    fn parts() -> Parts {
+        Request::builder()
+            .method(Method::POST)
+            .uri("/sales/123?active=true")
+            .header("x-existing", "one")
+            .body(Body::empty())
+            .unwrap()
+            .into_parts()
+            .0
+    }
+
+    #[test]
+    fn parts_ctx_exposes_route_and_request_metadata() {
+        let mut parts = parts();
+        let ctx = PartsCtx::new("sales", "/{id}", &mut parts);
+
+        assert_eq!(ctx.service(), "sales");
+        assert_eq!(ctx.route_path(), "/{id}");
+        assert_eq!(ctx.method(), Method::POST);
+        assert_eq!(ctx.uri().path(), "/sales/123");
+        assert_eq!(ctx.uri().query(), Some("active=true"));
+        assert_eq!(ctx.header("x-existing"), Some("one"));
+    }
+
+    #[test]
+    fn parts_ctx_mutates_uri_headers_and_extensions() {
+        let mut parts = parts();
+        let mut ctx = PartsCtx::new("sales", "/{id}", &mut parts);
+
+        *ctx.uri_mut() = "/internal/123".parse().unwrap();
+        ctx.set_header("x-new", "two").unwrap();
+        ctx.set_header_if_absent("x-existing", "ignored").unwrap();
+        ctx.set_header_if_absent("x-absent", "three").unwrap();
+        ctx.remove_header("x-new");
+        ctx.extensions_mut().insert(ExtensionValue("value"));
+
+        assert_eq!(ctx.uri().path(), "/internal/123");
+        assert!(ctx.header("x-new").is_none());
+        assert_eq!(ctx.header("x-existing"), Some("one"));
+        assert_eq!(ctx.header("x-absent"), Some("three"));
+        assert_eq!(
+            ctx.extensions().get::<ExtensionValue>(),
+            Some(&ExtensionValue("value"))
+        );
+    }
+
+    #[test]
+    fn parts_ctx_reports_invalid_header_mutations() {
+        let mut parts = parts();
+        let mut ctx = PartsCtx::new("sales", "/{id}", &mut parts);
+
+        let invalid_name = ctx
+            .set_header("bad header", "value")
+            .expect_err("invalid header name");
+        assert_eq!(
+            invalid_name.into_response().status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        let invalid_value = ctx
+            .set_header("x-value", "bad\nvalue")
+            .expect_err("invalid header value");
+        assert_eq!(
+            invalid_value.into_response().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+}

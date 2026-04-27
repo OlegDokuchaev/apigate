@@ -88,15 +88,17 @@ impl App {
     }
 }
 
-/// Serves an [`App`] on the provided socket address.
-pub async fn run(addr: SocketAddr, app: App) -> std::io::Result<()> {
-    run_router(addr, app.router).await
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Runs a pre-built axum router.
-///
-/// Useful when you need full control over outer tower/axum middleware stack.
-pub async fn run_router(addr: SocketAddr, router: Router) -> std::io::Result<()> {
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, router).await
+    #[test]
+    fn app_builder_builds_empty_app_and_exposes_router_hooks() {
+        let app = App::builder()
+            .build()
+            .unwrap()
+            .with_router(|router| router.route("/health", axum::routing::get(|| async { "ok" })));
+
+        let _router = app.into_router();
+    }
 }

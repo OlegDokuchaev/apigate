@@ -21,7 +21,7 @@ use crate::route::{DstChunk, Rewrite, RewriteTemplate, RouteMeta, SrcSeg};
 // ---------------------------------------------------------------------------
 
 /// Proxies an incoming request to an upstream backend:
-/// rewrite URI → strip hop-by-hop headers → set Host → forward → strip response hops.
+/// rewrite URI, strip hop-by-hop headers, set Host, forward, and strip response hops.
 pub(crate) async fn proxy_request(
     backend: &Backend,
     client: &Client<HttpConnector, Body>,
@@ -220,7 +220,7 @@ fn make_path_and_query_owned(
 // Hop-by-hop headers
 // ---------------------------------------------------------------------------
 
-/// Removes hop-by-hop headers per RFC 7230 §6.1:
+/// Removes hop-by-hop headers per RFC 7230 section 6.1:
 /// first those listed in `Connection`, then the standard set.
 fn strip_hop_headers(headers: &mut HeaderMap) {
     // Collect Connection tokens before removing
@@ -242,7 +242,7 @@ fn strip_hop_headers(headers: &mut HeaderMap) {
         headers.remove(name);
     }
 
-    // Standard hop-by-hop (typed constants — pre-hashed, no string conversion)
+    // Standard hop-by-hop headers with typed constants: no string conversion.
     headers.remove(PROXY_AUTHENTICATE);
     headers.remove(PROXY_AUTHORIZATION);
     headers.remove(TE);
@@ -251,4 +251,117 @@ fn strip_hop_headers(headers: &mut HeaderMap) {
     headers.remove(UPGRADE);
     headers.remove("keep-alive");
     headers.remove("proxy-connection");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use crate::backend::{BackendPool, BaseUri};
+    use crate::policy::Policy;
+    use crate::route::FixedRewrite;
+
+    fn meta(prefix: &'static str, rewrite: Rewrite) -> RouteMeta {
+        RouteMeta {
+            service: "sales",
+            route_path: "/items/{id}",
+            prefix,
+            rewrite,
+            pool: Arc::new(BackendPool::new(vec![
+                BaseUri::parse("http://127.0.0.1:8081").unwrap(),
+            ])),
+            policy: Arc::new(Policy::new()),
+            pipeline: None,
+        }
+    }
+
+    #[test]
+    fn strip_prefix_handles_root_and_partial_matches() {
+        assert_eq!(strip_prefix("/api/sales/1", "/api"), "/sales/1");
+        assert_eq!(strip_prefix("/api", "/api"), "/");
+        assert_eq!(strip_prefix("/apix", "/api"), "/");
+        assert_eq!(strip_prefix("/sales/1", "/api"), "/sales/1");
+    }
+
+    #[test]
+    fn static_rewrite_preserves_query() {
+        let meta = meta(
+            "/api",
+            Rewrite::Static(FixedRewrite::new("/internal/items")),
+        );
+        let uri: Uri = "/api/items/42?q=abc".parse().unwrap();
+
+        let rewritten = rewrite_path_and_query(&meta, &uri).unwrap().unwrap();
+
+        assert_eq!(rewritten.as_str(), "/internal/items?q=abc");
+    }
+
+    #[test]
+    fn strip_prefix_rewrite_preserves_query() {
+        let meta = meta("/api", Rewrite::StripPrefix);
+        let uri: Uri = "/api/items/42?q=abc".parse().unwrap();
+
+        let rewritten = rewrite_path_and_query(&meta, &uri).unwrap().unwrap();
+
+        assert_eq!(rewritten.as_str(), "/items/42?q=abc");
+    }
+
+    #[test]
+    fn template_rewrite_captures_path_segments() {
+        static SRC: &[SrcSeg] = &[SrcSeg::Lit("items"), SrcSeg::Param];
+        static DST: &[DstChunk] = &[
+            DstChunk::Lit("/internal/items/"),
+            DstChunk::Capture { src_index: 0 },
+        ];
+        static TEMPLATE: RewriteTemplate = RewriteTemplate {
+            src: SRC,
+            dst: DST,
+            static_len: "/internal/items/".len(),
+        };
+
+        let meta = meta("/api", Rewrite::Template(&TEMPLATE));
+        let uri: Uri = "/api/items/42?q=abc".parse().unwrap();
+
+        let rewritten = rewrite_path_and_query(&meta, &uri).unwrap().unwrap();
+
+        assert_eq!(rewritten.as_str(), "/internal/items/42?q=abc");
+    }
+
+    #[test]
+    fn template_rewrite_rejects_mismatched_source_path() {
+        static SRC: &[SrcSeg] = &[SrcSeg::Lit("items"), SrcSeg::Param];
+        static DST: &[DstChunk] = &[DstChunk::Capture { src_index: 0 }];
+        static TEMPLATE: RewriteTemplate = RewriteTemplate {
+            src: SRC,
+            dst: DST,
+            static_len: 0,
+        };
+
+        let meta = meta("/api", Rewrite::Template(&TEMPLATE));
+        let uri: Uri = "/api/other/42".parse().unwrap();
+
+        assert!(matches!(
+            rewrite_path_and_query(&meta, &uri),
+            Err(ProxyErrorKind::InvalidUpstreamUri)
+        ));
+    }
+
+    #[test]
+    fn strip_hop_headers_removes_standard_and_connection_listed_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONNECTION, "x-remove, upgrade".parse().unwrap());
+        headers.insert(UPGRADE, "websocket".parse().unwrap());
+        headers.insert(TRANSFER_ENCODING, "chunked".parse().unwrap());
+        headers.insert("x-remove", "1".parse().unwrap());
+        headers.insert("x-keep", "1".parse().unwrap());
+
+        strip_hop_headers(&mut headers);
+
+        assert!(!headers.contains_key(CONNECTION));
+        assert!(!headers.contains_key(UPGRADE));
+        assert!(!headers.contains_key(TRANSFER_ENCODING));
+        assert!(!headers.contains_key("x-remove"));
+        assert_eq!(headers.get("x-keep").unwrap(), "1");
+    }
 }

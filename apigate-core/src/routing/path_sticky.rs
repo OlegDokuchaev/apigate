@@ -39,10 +39,10 @@ fn extract_param<'a>(
 
     for tmpl in route_path.split('/').filter(|s| !s.is_empty()) {
         let value = path_segs.next()?;
-        if let Some(name) = tmpl.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
-            if name == param {
-                return Some(value);
-            }
+        if let Some(name) = tmpl.strip_prefix('{').and_then(|s| s.strip_suffix('}'))
+            && name == param
+        {
+            return Some(value);
         }
     }
 

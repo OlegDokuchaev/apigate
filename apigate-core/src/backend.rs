@@ -106,3 +106,51 @@ impl BackendPool {
         &self.backends
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::BaseUriParseError;
+
+    #[test]
+    fn base_uri_parse_stores_prefix_and_host_header() {
+        let base = BaseUri::parse("http://127.0.0.1:8081").expect("valid backend URI");
+
+        assert_eq!(base.scheme.as_str(), "http");
+        assert_eq!(base.authority.as_str(), "127.0.0.1:8081");
+        assert_eq!(base.prefix, "http://127.0.0.1:8081");
+        assert_eq!(base.host_header, "127.0.0.1:8081");
+    }
+
+    #[test]
+    fn base_uri_parse_rejects_missing_scheme() {
+        let err = BaseUri::parse("127.0.0.1:8081").expect_err("scheme is required");
+
+        assert!(matches!(err, BaseUriParseError::MissingScheme { .. }));
+    }
+
+    #[test]
+    fn base_uri_parse_rejects_uri_without_backend_authority() {
+        let err = BaseUri::parse("http:///path").expect_err("authority is required");
+
+        assert!(matches!(
+            err,
+            BaseUriParseError::MissingAuthority { .. } | BaseUriParseError::InvalidUri { .. }
+        ));
+    }
+
+    #[test]
+    fn backend_pool_exposes_stable_backend_indices() {
+        let pool = BackendPool::new(vec![
+            BaseUri::parse("http://127.0.0.1:8081").unwrap(),
+            BaseUri::parse("http://127.0.0.1:8082").unwrap(),
+        ]);
+
+        assert!(!pool.is_empty());
+        assert_eq!(pool.len(), 2);
+        assert_eq!(pool.get(0).unwrap().uri_prefix(), "http://127.0.0.1:8081");
+        assert_eq!(pool.get(1).unwrap().uri_prefix(), "http://127.0.0.1:8082");
+        assert!(pool.get(2).is_none());
+        assert_eq!(pool.backends().len(), 2);
+    }
+}

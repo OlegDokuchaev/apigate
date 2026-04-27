@@ -266,3 +266,96 @@ fn log_custom_pipeline_failure(event: RuntimeEvent<'_>, status: StatusCode) {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::{ApigateCoreError, ApigatePipelineError};
+
+    fn event(kind: RuntimeEventKind<'_>) -> RuntimeEvent<'_> {
+        RuntimeEvent {
+            service: "sales",
+            route_path: "/items/{id}",
+            kind,
+        }
+    }
+
+    #[test]
+    fn default_tracing_observer_accepts_all_runtime_event_kinds() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(std::io::sink)
+            .finish();
+
+        let method = Method::GET;
+        let uri: Uri = "/sales/items/42?verbose=true".parse().unwrap();
+        let pipeline_client_error = ApigateFrameworkError::from(
+            ApigatePipelineError::InvalidJsonBody("expected string".to_string()),
+        );
+        let pipeline_server_error = ApigateFrameworkError::from(
+            ApigatePipelineError::FailedSerializeMappedJson("missing field".to_string()),
+        );
+        let dispatch_client_error =
+            ApigateFrameworkError::from(ApigateCoreError::InvalidHeaderName);
+        let dispatch_server_error = ApigateFrameworkError::from(ApigateCoreError::NoBackends);
+
+        tracing::subscriber::with_default(subscriber, || {
+            default_tracing_observer(event(RuntimeEventKind::RequestStart {
+                method: &method,
+                uri: &uri,
+                has_pipeline: true,
+            }));
+            default_tracing_observer(event(RuntimeEventKind::PipelineFailedFramework {
+                error: &pipeline_client_error,
+            }));
+            default_tracing_observer(event(RuntimeEventKind::PipelineFailedFramework {
+                error: &pipeline_server_error,
+            }));
+            default_tracing_observer(event(RuntimeEventKind::PipelineFailedCustom {
+                status: StatusCode::BAD_REQUEST,
+            }));
+            default_tracing_observer(event(RuntimeEventKind::PipelineFailedCustom {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+            }));
+            default_tracing_observer(event(RuntimeEventKind::DispatchFailed {
+                error: &dispatch_client_error,
+            }));
+            default_tracing_observer(event(RuntimeEventKind::DispatchFailed {
+                error: &dispatch_server_error,
+            }));
+            default_tracing_observer(event(RuntimeEventKind::BackendSelected {
+                backend_index: 1,
+            }));
+            default_tracing_observer(event(RuntimeEventKind::UpstreamSucceeded {
+                backend_index: 1,
+                status: StatusCode::OK,
+                upstream_latency: Duration::from_millis(7),
+            }));
+            default_tracing_observer(event(RuntimeEventKind::UpstreamFailed {
+                backend_index: 1,
+                error: ProxyErrorKind::Timeout,
+                upstream_latency: Duration::from_millis(9),
+            }));
+        });
+    }
+
+    #[test]
+    fn default_tracing_observer_keeps_debug_only_events_noop_without_subscriber() {
+        let method = Method::POST;
+        let uri: Uri = "/sales/items".parse().unwrap();
+
+        default_tracing_observer(event(RuntimeEventKind::RequestStart {
+            method: &method,
+            uri: &uri,
+            has_pipeline: false,
+        }));
+        default_tracing_observer(event(RuntimeEventKind::BackendSelected {
+            backend_index: 0,
+        }));
+        default_tracing_observer(event(RuntimeEventKind::UpstreamSucceeded {
+            backend_index: 0,
+            status: StatusCode::CREATED,
+            upstream_latency: Duration::from_millis(1),
+        }));
+    }
+}
