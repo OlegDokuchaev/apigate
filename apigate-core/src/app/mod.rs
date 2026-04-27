@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,6 +15,11 @@ use crate::route::RouteMeta;
 
 mod build;
 mod dispatch;
+mod serve;
+mod upstream;
+
+pub use serve::{ServeConfig, run, run_router, run_router_with, run_with};
+pub use upstream::UpstreamConfig;
 
 /// Built gateway application.
 ///
@@ -35,8 +39,7 @@ pub struct AppBuilder {
     policies: HashMap<String, Arc<Policy>>,
     default_policy: Arc<Policy>,
     request_timeout: Duration,
-    connect_timeout: Duration,
-    pool_idle_timeout: Duration,
+    upstream: UpstreamConfig,
     map_body_limit: usize,
     state: http::Extensions,
     error_renderer: Arc<ErrorRenderer>,

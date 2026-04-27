@@ -20,7 +20,9 @@ mod route;
 /// Route key extraction traits and built-in routing strategies.
 pub mod routing;
 
-pub use app::{App, AppBuilder, run, run_router};
+pub use app::{
+    App, AppBuilder, ServeConfig, UpstreamConfig, run, run_router, run_router_with, run_with,
+};
 pub use backend::{Backend, BackendPool};
 pub use error::{
     ApigateBuildError, ApigateCoreError, ApigateError, ApigateFrameworkError, ApigatePipelineError,
