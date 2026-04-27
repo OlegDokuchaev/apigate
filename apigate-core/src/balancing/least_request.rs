@@ -64,18 +64,18 @@ impl Balancer for LeastRequest {
     }
 
     fn on_start(&self, event: &StartEvent) {
-        if let Some(counters) = self.in_flight.get() {
-            if let Some(counter) = counters.get(event.backend_index) {
-                counter.fetch_add(1, Ordering::Relaxed);
-            }
+        if let Some(counters) = self.in_flight.get()
+            && let Some(counter) = counters.get(event.backend_index)
+        {
+            counter.fetch_add(1, Ordering::Relaxed);
         }
     }
 
     fn on_result(&self, event: &ResultEvent) {
-        if let Some(counters) = self.in_flight.get() {
-            if let Some(counter) = counters.get(event.backend_index) {
-                counter.fetch_sub(1, Ordering::Relaxed);
-            }
+        if let Some(counters) = self.in_flight.get()
+            && let Some(counter) = counters.get(event.backend_index)
+        {
+            counter.fetch_sub(1, Ordering::Relaxed);
         }
     }
 }

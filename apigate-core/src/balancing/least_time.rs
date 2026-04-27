@@ -70,21 +70,20 @@ impl Balancer for LeastTime {
             return;
         }
 
-        if let Some(latencies) = self.ewma_us.get() {
-            if let Some(slot) = latencies.get(event.backend_index) {
-                let sample = event.head_latency.as_micros() as u64;
-                let mut old = slot.load(Ordering::Relaxed);
-                loop {
-                    let new = if old == 0 {
-                        sample
-                    } else {
-                        old - old / EWMA_WEIGHT + sample / EWMA_WEIGHT
-                    };
-                    match slot.compare_exchange_weak(old, new, Ordering::Relaxed, Ordering::Relaxed)
-                    {
-                        Ok(_) => break,
-                        Err(actual) => old = actual,
-                    }
+        if let Some(latencies) = self.ewma_us.get()
+            && let Some(slot) = latencies.get(event.backend_index)
+        {
+            let sample = event.head_latency.as_micros() as u64;
+            let mut old = slot.load(Ordering::Relaxed);
+            loop {
+                let new = if old == 0 {
+                    sample
+                } else {
+                    old - old / EWMA_WEIGHT + sample / EWMA_WEIGHT
+                };
+                match slot.compare_exchange_weak(old, new, Ordering::Relaxed, Ordering::Relaxed) {
+                    Ok(_) => break,
+                    Err(actual) => old = actual,
                 }
             }
         }
