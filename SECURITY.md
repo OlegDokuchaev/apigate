@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-ApiGate is currently pre-1.0. Security fixes are expected to target the latest published version.
+ApiGate follows [Semantic Versioning](https://semver.org/). Security fixes target the latest published `1.x` minor release. Older minor releases are not patched; users are expected to upgrade to the latest `1.x` to receive fixes.
 
 ## Reporting a Vulnerability
 

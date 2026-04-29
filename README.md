@@ -62,7 +62,7 @@ Add the facade crate to your application:
 
 ```toml
 [dependencies]
-apigate = "0.2.6"
+apigate = "1.0.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 serde = { version = "1", features = ["derive"] }
 anyhow = "1"
