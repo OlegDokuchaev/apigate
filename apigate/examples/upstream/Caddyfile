@@ -109,11 +109,10 @@ EOF 200
 		path_regexp reviews ^/api/v2/reviews/([^/]+)$
 	}
 	handle @reviews {
-		templates
 		respond `{
   "kind": "review",
   "id": "{re.reviews.1}",
-  "uri": "{{.Req.URL}}"
+  "uri": "{uri}"
 }` 200
 	}
 
