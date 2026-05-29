@@ -1,4 +1,4 @@
-//! Maps: transform query, JSON, and form data before forwarding upstream.
+//! Maps: transform JSON and form data before forwarding upstream.
 //! Shared state (`&AppConfig`) can be requested by map functions.
 
 use std::net::SocketAddr;
@@ -13,24 +13,6 @@ use uuid::Uuid;
 #[derive(Clone)]
 struct AppConfig {
     api_key: String,
-}
-
-// ---------------------------------------------------------------------------
-// Query map types
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize)]
-struct ProductsQuery {
-    page: Option<u32>,
-    size: Option<u32>,
-    q: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct ProductsQueryService {
-    offset: u32,
-    limit: u32,
-    query: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -86,21 +68,6 @@ async fn inject_user_headers(ctx: &mut apigate::PartsCtx) -> apigate::HookResult
 // Map functions
 // ---------------------------------------------------------------------------
 
-/// Query transformation: page/size -> offset/limit.
-#[apigate::map]
-async fn remap_products_query(input: ProductsQuery) -> apigate::MapResult<ProductsQueryService> {
-    let page = input.page.unwrap_or(1).max(1);
-    let size = input.size.unwrap_or(20).clamp(1, 100);
-    Ok(ProductsQueryService {
-        offset: (page - 1) * size,
-        limit: size,
-        query: input
-            .q
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty()),
-    })
-}
-
 /// JSON transformation with shared state access (`&AppConfig`).
 #[apigate::map]
 async fn remap_buy_json(
@@ -149,10 +116,6 @@ async fn remap_legacy_form(input: LegacyFormPublic) -> apigate::MapResult<Legacy
 mod sales {
     use super::*;
 
-    /// Query parameters transformed through a map function.
-    #[apigate::get("/products", query = ProductsQuery, map = remap_products_query)]
-    async fn get_products() {}
-
     /// JSON body transformed through a map function with shared state access.
     #[apigate::post("/buy", json = PublicBuyInput, before = [inject_user_headers], map = remap_buy_json)]
     async fn buy() {}
@@ -180,7 +143,6 @@ async fn main() -> anyhow::Result<()> {
     print!("\
 map - http://{listen}
 
-Query map:   curl 'http://{listen}/sales/products?page=2&size=5&q=test'
 Json map:    curl -X POST -H 'authorization: Bearer t' -H 'content-type: application/json' \
                -d '{{\"sale_ids\":[\"11111111-1111-1111-1111-111111111111\"],\"coupon\":\"sale10\"}}' http://{listen}/sales/buy
 Form map:    curl -X POST -H 'content-type: application/x-www-form-urlencoded' \

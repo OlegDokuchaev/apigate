@@ -1,5 +1,5 @@
 error: `map` requires `json = T` or `form = T`
-  --> tests/ui/fail/map_without_data.rs:10:1
+  --> tests/ui/fail/map_with_query.rs:10:1
    |
 10 | #[apigate::service(name = "sales", prefix = "/sales")]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

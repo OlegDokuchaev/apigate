@@ -1,8 +1,9 @@
-//! Hooks: authentication, shared state, header injection, hook chains,
-//! and passing per-request data between hooks through `RequestScope`.
+//! Hooks: authentication, shared state, header injection, query rewrite,
+//! hook chains, and passing per-request data through `RequestScope`.
 
 use std::net::SocketAddr;
 
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -21,6 +22,24 @@ struct AppConfig {
 #[derive(Clone)]
 struct RequestMeta {
     request_id: String,
+}
+
+// ---------------------------------------------------------------------------
+// Typed query data available to hooks through `RequestScope`.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+struct ProductsQuery {
+    page: Option<u32>,
+    size: Option<u32>,
+    q: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProductsQueryService<'a> {
+    offset: u32,
+    limit: u32,
+    query: Option<&'a str>,
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +88,24 @@ async fn log_request_meta(meta: RequestMeta) -> apigate::HookResult {
     Ok(())
 }
 
+/// Rewrites public product query parameters for the upstream service.
+#[apigate::hook]
+async fn remap_products_query(
+    input: &ProductsQuery,
+    ctx: &mut apigate::PartsCtx,
+) -> apigate::HookResult {
+    let page = input.page.unwrap_or(1).max(1);
+    let size = input.size.unwrap_or(20).clamp(1, 100);
+    let query = input.q.as_deref().map(str::trim).filter(|v| !v.is_empty());
+
+    ctx.set_query(&ProductsQueryService {
+        offset: (page - 1) * size,
+        limit: size,
+        query,
+    })?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -92,6 +129,10 @@ mod sales {
         before = [require_api_key, inject_user_headers, set_request_id, log_request_meta]
     )]
     async fn secure_user_profile() {}
+
+    /// Typed query data in a hook: validates the public query, then rewrites it.
+    #[apigate::get("/products", query = ProductsQuery, before = [remap_products_query])]
+    async fn get_products() {}
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +158,7 @@ Wrong key:       curl -H 'x-api-key: wrong' http://{listen}/sales/admin/stats
 Auth:            curl -H 'authorization: Bearer t' http://{listen}/sales/user
 No token:        curl http://{listen}/sales/user
 Hook chain:      curl -H 'x-api-key: secret-key' -H 'authorization: Bearer t' http://{listen}/sales/secure-user
+Query rewrite:   curl 'http://{listen}/sales/products?page=2&size=5&q=test'
 
 Upstream:        caddy run --config apigate/examples/upstream/Caddyfile
 ");

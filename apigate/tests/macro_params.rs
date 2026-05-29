@@ -9,6 +9,7 @@ fn macro_param_expansion() {
     t.compile_fail("tests/ui/fail/scope_with_ref_param.rs");
     t.compile_fail("tests/ui/fail/map_without_owned_input.rs");
     t.compile_fail("tests/ui/fail/map_without_data.rs");
+    t.compile_fail("tests/ui/fail/map_with_query.rs");
     t.compile_fail("tests/ui/fail/route_outside_service.rs");
     t.compile_fail("tests/ui/fail/route_unknown_arg.rs");
 }

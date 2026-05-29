@@ -46,7 +46,7 @@ struct SalePath {
     id: Uuid,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct LookupInput {
     q: String,
 }
@@ -73,16 +73,18 @@ async fn inject_header(ctx: &mut apigate::PartsCtx<'_>, state: &AppState) -> api
     Ok(())
 }
 
-#[apigate::map]
-async fn remap_lookup(
-    input: LookupInput,
+#[apigate::hook]
+async fn remap_lookup_query(
+    input: &LookupInput,
     path: &SalePath,
     state: &AppState,
-) -> apigate::MapResult<LookupService> {
-    Ok(LookupService {
+    ctx: &mut apigate::PartsCtx<'_>,
+) -> apigate::HookResult {
+    ctx.set_query(&LookupService {
         query: format!("{}:{}", path.id, input.q.trim()),
         source: state.source,
-    })
+    })?;
+    Ok(())
 }
 
 #[apigate::map]
@@ -96,7 +98,7 @@ async fn remap_buy(input: BuyInput) -> apigate::MapResult<BuyService> {
 mod sales {
     use super::*;
 
-    #[apigate::get("/{id}/lookup", path = SalePath, query = LookupInput, before = [inject_header], map = remap_lookup)]
+    #[apigate::get("/{id}/lookup", path = SalePath, query = LookupInput, before = [inject_header, remap_lookup_query])]
     async fn lookup() {}
 
     #[apigate::post("/buy", json = BuyInput, map = remap_buy)]
@@ -113,7 +115,7 @@ async fn app(base_url: String) -> Router {
 }
 
 #[tokio::test]
-async fn hooks_path_validation_and_query_map_run_before_proxying() {
+async fn hooks_path_validation_and_query_rewrite_run_before_proxying() {
     let upstream = support::spawn_upstream(Router::new().fallback(echo)).await;
     let router = app(upstream.url()).await;
     let id = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();

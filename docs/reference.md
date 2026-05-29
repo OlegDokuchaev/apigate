@@ -66,8 +66,9 @@ Full route shape:
     to = "/upstream/{id}",
     path = PathParams,
     query = QueryInput,
+    json = BodyInput,
     before = [auth, inject_headers],
-    map = remap,
+    map = remap_body,
     policy = "sticky_by_id",
 )]
 async fn route_name() {}
@@ -80,15 +81,15 @@ Route arguments:
 | `"/path"` | Public route path relative to the service prefix. Supports `{param}` segments. |
 | `to = "/path"` | Upstream path rewrite. Without `to`, ApiGate strips the service prefix and forwards the remaining path. Supports `{param}` template captures. |
 | `path = T` | Deserializes typed path parameters with axum. `T` should be `Deserialize + Clone + Send + Sync + 'static`. |
-| `query = T` | Validates query string as `T`. With `map`, serializes mapped output back into the query string. |
+| `query = T` | Deserializes typed query parameters and stores them in `RequestScope`. `T` should be `Deserialize + Clone + Send + Sync + 'static`. |
 | `json = T` | Validates JSON body as `T`. With `map`, serializes mapped output as a new JSON body. |
 | `form = T` | Validates `application/x-www-form-urlencoded` data as `T`. With `map`, serializes mapped output back as form data or query data for GET/HEAD. |
 | `multipart` | Enables multipart passthrough. The body is not read or buffered. |
 | `before = [...]` | Hooks executed before proxying. They run in the listed order. |
-| `map = fn_name` | Typed request transformation for `query`, `json`, or `form`. Not supported with `multipart`. |
+| `map = fn_name` | Typed request transformation for `json` or `form`. Not supported with `query`-only or `multipart` routes. |
 | `policy = "name"` | Route-level policy override. |
 
-Only one body/data mode can be used per route: `query`, `json`, `form`, or `multipart`.
+`query = T` is independent from body handling and can be combined with `json`, `form`, or `multipart`. Only one body mode can be used per route: `json`, `form`, or `multipart`.
 
 ### Path Rewrites
 
@@ -142,11 +143,48 @@ mod sales {
 
 Path values are extracted before hooks and inserted into `RequestScope`. Hooks and maps can request `&SalePath` or owned `SalePath` as parameters.
 
-### Query, JSON, and Form
+### Query Parameters
 
 ```rust
+#[derive(Debug, Clone, serde::Deserialize)]
+struct SearchQuery {
+    q: String,
+}
+
 #[apigate::get("/search", query = SearchQuery)]
 async fn search() {}
+```
+
+Query values are extracted before hooks and inserted into `RequestScope`, like path values. Hooks and maps can request `&SearchQuery` or owned `SearchQuery` as parameters.
+
+List values use repeated query keys, for example `ids=1&ids=2` deserializes into `Vec<u32>` and serializes back as `ids=1&ids=2`. Bracketed keys such as `ids[]=1&ids[]=2` are also supported when the field uses `#[serde(rename = "ids[]")]`.
+
+To rewrite query data before proxying, use a hook and `PartsCtx::set_query`:
+
+```rust
+#[derive(serde::Serialize)]
+struct UpstreamSearch {
+    query: String,
+}
+
+#[apigate::hook]
+async fn rewrite_query(
+    input: &SearchQuery,
+    ctx: &mut apigate::PartsCtx,
+) -> apigate::HookResult {
+    ctx.set_query(&UpstreamSearch {
+        query: input.q.trim().to_owned(),
+    })?;
+    Ok(())
+}
+
+#[apigate::get("/search", query = SearchQuery, before = [rewrite_query])]
+async fn rewritten_search() {}
+```
+
+### JSON and Form
+
+```rust
 
 #[apigate::post("/buy", json = BuyInput)]
 async fn buy() {}
@@ -155,7 +193,7 @@ async fn buy() {}
 async fn legacy() {}
 ```
 
-Without `map`, ApiGate validates the input and forwards the original body/query data. For `json` and `form` bodies, validation requires reading the body up to `map_body_limit`.
+Without `map`, ApiGate validates the input and forwards the original body data. Validation requires reading the body up to `map_body_limit`.
 
 With `map`, ApiGate validates the input, calls your mapper, and forwards the mapped output.
 
@@ -197,6 +235,7 @@ async fn protected() {}
 | `route_path()` | Route path relative to the service prefix. |
 | `method()` | Current HTTP method. |
 | `uri()` / `uri_mut()` | Read or mutate the request URI. |
+| `set_query(&value)` | Serialize a value with `serde_html_form` and replace the URI query string. |
 | `headers()` / `headers_mut()` | Read or mutate headers. |
 | `header(name)` | Read a UTF-8 header as `Option<&str>`. |
 | `set_header(name, value)` | Insert or replace a header. |
@@ -206,7 +245,7 @@ async fn protected() {}
 
 ## Maps
 
-Maps transform typed `query`, `json`, or `form` inputs before proxying.
+Maps transform typed `json` or `form` inputs before proxying. Query rewrites belong in hooks through `PartsCtx::set_query`.
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -244,7 +283,6 @@ Mapping behavior:
 
 | Route data | Map output handling |
 |---|---|
-| `query = T` | Serialized with `serde_urlencoded` and written into the URI query string. |
 | `json = T` | Serialized with `serde_json` and sent as a new JSON body. |
 | `form = T` | Serialized with `serde_urlencoded`; sent as a form body for non-GET/HEAD and as query string for GET/HEAD. |
 
@@ -259,7 +297,7 @@ Mapping behavior:
 | `&T` | Local per-request value first, then shared app state. | `config: &AuthConfig` |
 | `&mut T` | Local per-request value only. | `counter: &mut RequestCounter` |
 | `T` in a hook | `scope.take::<T>()`; falls back to cloning shared state. | `path: SalePath` |
-| First owned `T` in a map | Typed input from `query`, `json`, or `form`. | `input: PublicBuy` |
+| First owned `T` in a map | Typed input from `json` or `form`. | `input: PublicBuy` |
 | Additional owned `T` in a map | `scope.take::<T>()`; falls back to cloning shared state. | `path: SalePath` |
 
 Rules enforced by the macros:
@@ -834,4 +872,3 @@ apigate::run_with(addr, app, config).await?;
 `ServeConfig` also supports listener buffer sizes, IPv6-only binding, and
 `SO_REUSEPORT` on supported Unix platforms. Use `run_router_with` for the same
 socket options with a manually composed router.
-

@@ -3,13 +3,13 @@
 | Example | Shows |
 |---|---|
 | `basic` | Passthrough proxying, static rewrite (`to`), and rewrite templates (`{id}`). |
-| `hooks` | Shared state in hooks, auth, header injection, hook chains, and per-request data through scope. |
+| `hooks` | Shared state in hooks, auth, header/query mutation, hook chains, and per-request data through scope. |
 | `errors` | Global JSON error renderer, `user_message`/`debug_details`, and custom JSON errors from hooks. |
 | `logging` | `tracing` integration with `runtime_observer` and custom ApiGate runtime events. |
 | `tower_logging` | External `tower_http::TraceLayer` added through `.with_router(...)`. |
 | `runtime_tuning` | Listener socket tuning plus upstream hyper-util client/connector settings. |
 | `path` | Path validation (UUID), path data in hooks (`&T`), and path data in map functions. |
-| `map` | Query, JSON, and form transformations, including shared state access from a map. |
+| `map` | JSON and form transformations, including shared state access from a map. |
 | `policy` | HeaderSticky + ConsistentHash, PathSticky, LeastRequest, LeastTime, and RoundRobin. |
 | `multipart` | Multipart upload passthrough with and without auth. |
 
