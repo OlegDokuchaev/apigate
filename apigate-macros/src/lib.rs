@@ -125,10 +125,10 @@ pub fn hook(_args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// Marks an async function as a request mapper.
 ///
-/// Maps transform typed `query`, `json`, or `form` inputs into a new serialized
-/// upstream request payload or query string. The first owned parameter is kept
-/// as the typed map input; other supported parameters are extracted from
-/// `RequestScope` or request parts.
+/// Maps transform typed `json` or `form` inputs into a new serialized upstream
+/// request payload. The first owned parameter is kept as the typed map input;
+/// other supported parameters are extracted from `RequestScope` or request
+/// parts.
 #[proc_macro_attribute]
 pub fn map(_args: TokenStream, input: TokenStream) -> TokenStream {
     expand_fn_params(input, ExpansionMode::Map)

@@ -5,9 +5,11 @@ use syn::{Ident, Item, ItemFn, Path, Result, Type};
 use crate::route::DataKind;
 
 /// Generates a single `__apigate_pipeline_<fn>` that orchestrates:
-/// 1. before hooks (with ctx + scope)
-/// 2. parse/validate body (always if data type declared)
-/// 3. optional map (reads parsed input, writes transformed body)
+/// 1. parse path/query params into scope
+/// 2. before hooks (with ctx + scope)
+/// 3. parse/validate body (always if data type declared)
+/// 4. optional map (reads parsed input, writes transformed body)
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn generate_pipeline_wrapper(
     apigate_path: &TokenStream2,
     f: &ItemFn,
@@ -15,22 +17,22 @@ pub(crate) fn generate_pipeline_wrapper(
     data: &DataKind,
     map_fn: Option<&Path>,
     path_type: Option<&Type>,
+    query_type: Option<&Type>,
     generated_items: &mut Vec<Item>,
 ) -> Result<TokenStream2> {
     let has_hooks = !hooks.is_empty();
-    let has_body = matches!(
-        data,
-        DataKind::Json(_) | DataKind::Query(_) | DataKind::Form(_)
-    );
+    let has_body = matches!(data, DataKind::Json(_) | DataKind::Form(_));
     let has_path = path_type.is_some();
+    let has_query = query_type.is_some();
 
-    if !has_hooks && !has_body && map_fn.is_none() && !has_path {
+    if !has_hooks && !has_body && map_fn.is_none() && !has_path && !has_query {
         return Ok(quote!(None));
     }
 
     let pipeline_ident = format_ident!("__apigate_pipeline_{}", f.sig.ident);
 
     let path_phase = build_path_phase(path_type);
+    let query_phase = build_query_phase(query_type);
     let hook_phase = if has_hooks {
         let calls = hooks
             .iter()
@@ -49,6 +51,7 @@ pub(crate) fn generate_pipeline_wrapper(
         ) -> #apigate_path::PipelineFuture<'a> {
             ::std::boxed::Box::pin(async move {
                 #path_phase
+                #query_phase
                 #hook_phase
                 #body_phase
             })
@@ -68,6 +71,20 @@ fn build_path_phase(path_type: Option<&Type>) -> TokenStream2 {
         Some(ty) => quote! {
             let __apigate_path_value: #ty = ctx.extract_path::<#ty>().await?;
             scope.insert(__apigate_path_value);
+        },
+        None => quote!(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Query phase
+// ---------------------------------------------------------------------------
+
+fn build_query_phase(query_type: Option<&Type>) -> TokenStream2 {
+    match query_type {
+        Some(ty) => quote! {
+            let __apigate_query_value: #ty = ctx.extract_query::<#ty>()?;
+            scope.insert(__apigate_query_value);
         },
         None => quote!(),
     }
@@ -94,11 +111,10 @@ fn build_body_phase(
         )),
         (Some(_), DataKind::None) => Err(syn::Error::new_spanned(
             route_fn_ident,
-            "`map` requires one of `query = T`, `json = T`, or `form = T`",
+            "`map` requires `json = T` or `form = T`",
         )),
 
         (map_fn, DataKind::Json(ty)) => Ok(json_phase(apigate_path, ty, map_fn)),
-        (map_fn, DataKind::Query(ty)) => Ok(query_phase(apigate_path, ty, map_fn)),
         (map_fn, DataKind::Form(ty)) => Ok(form_phase(apigate_path, ty, map_fn)),
     }
 }
@@ -160,42 +176,6 @@ fn json_phase(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) -> 
             let _: #ty = #apigate_path::__private::serde_json::from_slice(&bytes)
                 .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidJsonBody(err.to_string())))?;
             Ok(#apigate_path::__private::axum::body::Body::from(bytes))
-        },
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Query phase
-// ---------------------------------------------------------------------------
-
-fn query_phase(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) -> TokenStream2 {
-    let take = take_body_expr(apigate_path);
-
-    match map_fn {
-        Some(map_fn) => quote! {
-            let input: #ty = #apigate_path::__private::axum::extract::Query::<#ty>::try_from_uri(ctx.uri())
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidQuery(err.to_string())))?
-                .0;
-            let output = #map_fn(input, &mut ctx, &mut scope).await?;
-            let encoded = #apigate_path::__private::serde_urlencoded::to_string(&output)
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::FailedSerializeMappedQuery(err.to_string())))?;
-            let path = ctx.uri().path().to_string();
-            let mut path_and_query = path;
-            if !encoded.is_empty() {
-                path_and_query.push('?');
-                path_and_query.push_str(&encoded);
-            }
-            *ctx.uri_mut() = #apigate_path::__private::http::Uri::builder()
-                .path_and_query(path_and_query)
-                .build()
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::FailedRebuildUri(err.to_string())))?;
-            #take
-        },
-        None => quote! {
-            let _: #ty = #apigate_path::__private::axum::extract::Query::<#ty>::try_from_uri(ctx.uri())
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidQuery(err.to_string())))?
-                .0;
-            #take
         },
     }
 }
