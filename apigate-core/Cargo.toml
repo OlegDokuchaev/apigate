@@ -19,6 +19,8 @@ http = "1"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 smallvec = "1"
 socket2 = { version = "0.6", features = ["all"] }
+serde = "1"
+serde_html_form = "0.4"
 thiserror = "2"
 tracing = "0.1"
 
