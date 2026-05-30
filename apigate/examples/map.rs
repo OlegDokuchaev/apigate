@@ -1,5 +1,4 @@
 //! Maps: transform JSON and form data before forwarding upstream.
-//! Shared state (`&AppConfig`) can be requested by map functions.
 
 use std::net::SocketAddr;
 
@@ -48,6 +47,31 @@ struct LegacyFormPublic {
 struct LegacyFormService {
     title: String,
     category_code: String,
+}
+
+// ---------------------------------------------------------------------------
+// Raw body map types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct WebhookEvent {
+    id: String,
+    kind: String,
+}
+
+#[derive(Debug, Serialize)]
+struct UpstreamEvent {
+    event_id: String,
+    event_kind: String,
+    verified: bool,
+}
+
+/// Dependency-free stand-in for an HMAC: FNV-1a over the raw bytes.
+fn signature(bytes: &[u8]) -> String {
+    let hash = bytes.iter().fold(2166136261u32, |h, &b| {
+        (h ^ u32::from(b)).wrapping_mul(16777619)
+    });
+    format!("{hash:08x}")
 }
 
 // ---------------------------------------------------------------------------
@@ -108,6 +132,35 @@ async fn remap_legacy_form(input: LegacyFormPublic) -> apigate::MapResult<Legacy
     })
 }
 
+/// Typed `json` input **plus** the exact raw bytes.
+#[apigate::map]
+async fn verify_and_remap(
+    input: WebhookEvent,
+    raw: apigate::RawBody,
+    ctx: &mut apigate::PartsCtx,
+) -> apigate::MapResult<UpstreamEvent> {
+    let provided = ctx.header("x-signature").unwrap_or_default();
+    if provided != signature(raw.as_bytes()) {
+        return Err(apigate::ApigateError::unauthorized("invalid signature"));
+    }
+
+    Ok(UpstreamEvent {
+        event_id: input.id,
+        event_kind: input.kind,
+        verified: true,
+    })
+}
+
+/// No `json`/`form`: `RawBody` is the map input and the output is any `impl Into<Body>`.
+#[apigate::map]
+async fn forward_raw(
+    raw: apigate::RawBody,
+    ctx: &mut apigate::PartsCtx,
+) -> apigate::MapResult<Vec<u8>> {
+    ctx.set_header("x-raw-len", raw.len().to_string())?;
+    Ok(raw.as_bytes().to_vec())
+}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -123,6 +176,14 @@ mod sales {
     /// Form body transformed through a map function.
     #[apigate::post("/legacy-create", form = LegacyFormPublic, map = remap_legacy_form)]
     async fn legacy_create() {}
+
+    /// Typed body + raw-byte signature verification.
+    #[apigate::post("/events", json = WebhookEvent, map = verify_and_remap)]
+    async fn events() {}
+
+    /// No schema: inspect and forward the exact body.
+    #[apigate::post("/raw", map = forward_raw)]
+    async fn raw() {}
 }
 
 // ---------------------------------------------------------------------------
@@ -140,16 +201,26 @@ async fn main() -> anyhow::Result<()> {
         })
         .build()?;
 
-    print!("\
+    let webhook = r#"{"id":"evt_1","kind":"order.created"}"#;
+    let sig = signature(webhook.as_bytes());
+
+    print!(
+        "\
 map - http://{listen}
 
-Json map:    curl -X POST -H 'authorization: Bearer t' -H 'content-type: application/json' \
-               -d '{{\"sale_ids\":[\"11111111-1111-1111-1111-111111111111\"],\"coupon\":\"sale10\"}}' http://{listen}/sales/buy
-Form map:    curl -X POST -H 'content-type: application/x-www-form-urlencoded' \
-               -d 'title=Demo&category=pets' http://{listen}/sales/legacy-create
+Json map:        curl -X POST -H 'authorization: Bearer t' -H 'content-type: application/json' \
+                   -d '{{\"sale_ids\":[\"11111111-1111-1111-1111-111111111111\"],\"coupon\":\"sale10\"}}' http://{listen}/sales/buy
+Form map:        curl -X POST -H 'content-type: application/x-www-form-urlencoded' \
+                   -d 'title=Demo&category=pets' http://{listen}/sales/legacy-create
+Raw + json map:  curl -X POST -H 'content-type: application/json' -H 'x-signature: {sig}' \
+                   -d '{webhook}' http://{listen}/sales/events
+Bad signature:   curl -X POST -H 'content-type: application/json' -H 'x-signature: deadbeef' \
+                   -d '{webhook}' http://{listen}/sales/events
+Raw map:         curl -X POST --data-binary 'any-raw-bytes-here' http://{listen}/sales/raw
 
-Upstream:    caddy run --config apigate/examples/upstream/Caddyfile
-");
+Upstream:        caddy run --config apigate/examples/upstream/Caddyfile
+"
+    );
 
     apigate::run(listen, app).await?;
     Ok(())
