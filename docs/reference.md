@@ -86,7 +86,7 @@ Route arguments:
 | `form = T` | Validates `application/x-www-form-urlencoded` data as `T`. With `map`, serializes mapped output back as form data or query data for GET/HEAD. |
 | `multipart` | Enables multipart passthrough. The body is not read or buffered. |
 | `before = [...]` | Hooks executed before proxying. They run in the listed order. |
-| `map = fn_name` | Typed request transformation for `json` or `form`. Not supported with `query`-only or `multipart` routes. |
+| `map = fn_name` | Request transformation. Works with `json`, `form`, or no body data (the map then takes a `RawBody` input). Not supported with `multipart` routes. |
 | `policy = "name"` | Route-level policy override. |
 
 `query = T` is independent from body handling and can be combined with `json`, `form`, or `multipart`. Only one body mode can be used per route: `json`, `form`, or `multipart`.
@@ -285,6 +285,66 @@ Mapping behavior:
 |---|---|
 | `json = T` | Serialized with `serde_json` and sent as a new JSON body. |
 | `form = T` | Serialized with `serde_urlencoded`; sent as a form body for non-GET/HEAD and as query string for GET/HEAD. |
+| no body data | The map takes `RawBody`; its output (`impl Into<Body>`) is sent as the new body. |
+
+### Raw Request Bytes
+
+Maps can read the exact request bytes through `apigate::RawBody`. These are the
+original bytes, before parsing, so this is the right place to verify signatures
+or checksums computed over the raw body (re-serializing the parsed value would
+change the bytes).
+
+Beside a typed `json`/`form` input, declare `RawBody` as an extra by-value
+parameter:
+
+```rust
+#[derive(serde::Deserialize)]
+struct WebhookEvent {
+    id: String,
+}
+
+#[derive(serde::Serialize)]
+struct UpstreamEvent {
+    event_id: String,
+    verified: bool,
+}
+
+#[apigate::map]
+async fn verify_and_remap(
+    input: WebhookEvent,
+    raw: apigate::RawBody,
+    ctx: &mut apigate::PartsCtx,
+) -> apigate::MapResult<UpstreamEvent> {
+    if ctx.header("x-signature") != Some(&expected_signature(raw.as_bytes())) {
+        return Err(apigate::ApigateError::unauthorized("invalid signature"));
+    }
+    Ok(UpstreamEvent { event_id: input.id, verified: true })
+}
+
+#[apigate::post("/events", json = WebhookEvent, map = verify_and_remap)]
+async fn events() {}
+```
+
+`RawBody` is owned (a cheap reference-counted `Bytes` clone), so it composes
+with `&T` shared state and `&mut PartsCtx`, unlike `&mut RequestScope`.
+
+A route can also declare `map` with no `json`/`form`. The map then takes
+`RawBody` as its input and returns any `impl Into<Body>` (`RawBody`, `Bytes`,
+`Vec<u8>`, `String`):
+
+```rust
+#[apigate::map]
+async fn forward_raw(raw: apigate::RawBody) -> apigate::MapResult<Vec<u8>> {
+    Ok(raw.as_bytes().to_vec())
+}
+
+#[apigate::post("/raw", map = forward_raw)]
+async fn raw() {}
+```
+
+`RawBody` requires a buffered body, so it is not available for `form` GET/HEAD
+routes (which read the query string instead); requesting it there fails with a
+`MissingFromScope` pipeline error. The `map` example shows both forms.
 
 ## Hook and Map Parameters
 
@@ -298,6 +358,7 @@ Mapping behavior:
 | `&mut T` | Local per-request value only. | `counter: &mut RequestCounter` |
 | `T` in a hook | `scope.take::<T>()`; falls back to cloning shared state. | `path: SalePath` |
 | First owned `T` in a map | Typed input from `json` or `form`. | `input: PublicBuy` |
+| `RawBody` in a map | Owned clone of the raw request bytes. It is the map input when the route has no `json`/`form`. | `raw: apigate::RawBody` |
 | Additional owned `T` in a map | `scope.take::<T>()`; falls back to cloning shared state. | `path: SalePath` |
 
 Rules enforced by the macros:
@@ -307,6 +368,7 @@ Rules enforced by the macros:
 - At most one extracted `&mut T` parameter.
 - `&mut RequestScope` cannot be combined with extracted `&T` or `&mut T` parameters.
 - Extracted `&mut T` cannot be combined with extracted `&T` parameters.
+- `RawBody` is map-only and must be taken by value (not by reference).
 - Hook and map functions must be `async`.
 
 Example using shared state and per-request path data:
@@ -395,6 +457,7 @@ async fn log_request(meta: RequestMeta) -> apigate::HookResult {
 | `insert(value)` | Insert local per-request value. |
 | `take::<T>()` | Remove local value, or clone from shared app state if absent. |
 | `take_body()` | Take request body ownership. Used by generated pipelines. |
+| `raw_body()` | Raw request body bytes (`&[u8]`) buffered by a map pipeline, if any. |
 | `body_limit()` | Current generated pipeline body limit. |
 
 ## Error Handling

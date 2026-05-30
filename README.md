@@ -30,7 +30,7 @@ Under the hood ApiGate is built on `axum`, `hyper-util`, `tower`, and `tracing`.
 - Reverse proxying with streaming passthrough when a route does not need to read the body.
 - Typed validation for `path`, `query`, `json`, and `form` inputs.
 - `before` hooks for auth, headers, request metadata, and per-request state.
-- `map` functions for typed JSON/form request transformation before the upstream call.
+- `map` functions for typed JSON/form request transformation before the upstream call, with access to the original request bytes through `RawBody` (including schema-less maps).
 - Multipart passthrough without buffering file bodies.
 - Built-in policies: round-robin, consistent hash, header/path sticky, least-request, least-time.
 - Custom routing strategies and custom balancers.
@@ -260,7 +260,7 @@ Example guide:
 | `tower_logging` | External `tower_http::TraceLayer` with `.with_router(...)`. |
 | `runtime_tuning` | Listener socket tuning plus upstream hyper-util client/connector settings. |
 | `path` | Typed path validation, path data in hooks, path data in maps. |
-| `map` | JSON and form transformations. |
+| `map` | JSON and form transformations, raw-byte signature checks beside a typed input, and schema-less `RawBody` maps. |
 | `policy` | Header/path sticky routing, consistent hash, least-request, least-time, round-robin. |
 | `multipart` | Multipart upload passthrough with and without auth. |
 
