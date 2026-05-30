@@ -138,6 +138,16 @@ impl RawBody {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Consumes the handle and returns the underlying [`Bytes`] without copying.
+    pub fn into_bytes(self) -> Bytes {
+        self.0
+    }
+
+    /// Returns a zero-copy sub-slice of the body over `range`.
+    pub fn slice(&self, range: impl std::ops::RangeBounds<usize>) -> Bytes {
+        self.0.slice(range)
+    }
 }
 
 impl std::ops::Deref for RawBody {
@@ -157,6 +167,12 @@ impl AsRef<[u8]> for RawBody {
 impl From<RawBody> for Body {
     fn from(raw: RawBody) -> Self {
         Body::from(raw.0)
+    }
+}
+
+impl From<RawBody> for Bytes {
+    fn from(raw: RawBody) -> Self {
+        raw.0
     }
 }
 

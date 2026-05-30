@@ -156,9 +156,9 @@ async fn verify_and_remap(
 async fn forward_raw(
     raw: apigate::RawBody,
     ctx: &mut apigate::PartsCtx,
-) -> apigate::MapResult<Vec<u8>> {
+) -> apigate::MapResult<apigate::RawBody> {
     ctx.set_header("x-raw-len", raw.len().to_string())?;
-    Ok(raw.as_bytes().to_vec())
+    Ok(raw)
 }
 
 // ---------------------------------------------------------------------------
