@@ -166,7 +166,8 @@ impl<'a> PartsCtx<'a> {
         Ok(encoded)
     }
 
-    fn set_encoded_query(&mut self, encoded: &str) -> Result<(), ApigateError> {
+    /// Replaces the URI query string with pre-encoded `application/x-www-form-urlencoded` data.
+    pub fn set_encoded_query(&mut self, encoded: &str) -> Result<(), ApigateError> {
         match (encoded.is_empty(), self.parts.uri.query()) {
             (true, None) => return Ok(()),
             (false, Some(current)) if current == encoded => return Ok(()),

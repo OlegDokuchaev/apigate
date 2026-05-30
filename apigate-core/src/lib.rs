@@ -23,6 +23,7 @@ pub mod routing;
 pub use app::{
     App, AppBuilder, ServeConfig, UpstreamConfig, run, run_router, run_router_with, run_with,
 };
+pub use axum::body::Bytes;
 pub use backend::{Backend, BackendPool};
 pub use error::{
     ApigateBuildError, ApigateCoreError, ApigateError, ApigateFrameworkError, ApigatePipelineError,
@@ -33,7 +34,8 @@ pub use observability::{
 };
 pub use parts_ctx::PartsCtx;
 pub use pipeline::{
-    HookResult, MapResult, PipelineFn, PipelineFuture, PipelineResult, RawBody, RequestScope,
+    HookResult, MapBodyKind, MapResult, PipelineFn, PipelineFuture, PipelineResult, RawBody,
+    RequestScope,
 };
 pub use route::RewriteSpec;
 #[doc(hidden)]

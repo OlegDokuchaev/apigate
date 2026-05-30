@@ -113,6 +113,16 @@ pub type HookResult = Result<(), ApigateError>;
 /// Result type returned by `#[apigate::map]` functions.
 pub type MapResult<T> = Result<T, ApigateError>;
 
+/// Serialization format a generated map wrapper must emit.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub enum MapBodyKind {
+    /// Serialize the output as JSON.
+    Json,
+    /// Serialize the output as `application/x-www-form-urlencoded`.
+    Form,
+}
+
 // ---------------------------------------------------------------------------
 // RawBody
 // ---------------------------------------------------------------------------
