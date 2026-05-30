@@ -79,10 +79,6 @@ pub(crate) enum DataKind {
 }
 
 impl DataKind {
-    fn allows_map(&self) -> bool {
-        matches!(self, Self::Json(_) | Self::Form(_))
-    }
-
     /// Transitions to `next`, erroring if a data kind was already chosen.
     fn set(self, next: DataKind, span: Span) -> Result<DataKind> {
         match self {
@@ -112,24 +108,13 @@ pub(crate) struct RouteArgs {
 }
 
 impl RouteArgs {
-    /// Checks cross-field invariants (e.g. `map` requires a typed data kind).
+    /// Checks cross-field invariants.
     fn validate(&self) -> Result<()> {
-        if self.map.is_some() && !self.data.allows_map() {
-            match self.data {
-                DataKind::Multipart => {
-                    return Err(Error::new(
-                        Span::call_site(),
-                        "`map` is not supported together with `multipart`",
-                    ));
-                }
-                DataKind::None => {
-                    return Err(Error::new(
-                        Span::call_site(),
-                        "`map` requires `json = T` or `form = T`",
-                    ));
-                }
-                DataKind::Json(_) | DataKind::Form(_) => {}
-            }
+        if self.map.is_some() && matches!(self.data, DataKind::Multipart) {
+            return Err(Error::new(
+                Span::call_site(),
+                "`map` is not supported together with `multipart`",
+            ));
         }
 
         Ok(())
@@ -446,11 +431,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_map_without_supported_data_kind() {
-        assert!(syn::parse_str::<RouteArgs>(r#""/items", map = remap"#).is_err());
+    fn allows_map_without_body_data_but_rejects_multipart() {
+        // `map` without `json`/`form` is allowed: the map takes a `RawBody` input.
+        assert!(syn::parse_str::<RouteArgs>(r#""/items", map = remap"#).is_ok());
         assert!(
-            syn::parse_str::<RouteArgs>(r#""/items", query = QueryInput, map = remap"#).is_err()
+            syn::parse_str::<RouteArgs>(r#""/items", query = QueryInput, map = remap"#).is_ok()
         );
+        // `map` with `multipart` is still rejected.
         assert!(syn::parse_str::<RouteArgs>(r#""/items", multipart, map = remap"#).is_err());
     }
 }

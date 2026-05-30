@@ -17,6 +17,7 @@ enum ParamSource {
     ScopeRef(Type),
     ScopeMut(Type),
     ScopeTake,
+    RawBody,
 }
 
 #[derive(Clone)]
@@ -30,6 +31,14 @@ struct ParamPlan {
 struct SpecialTypePaths {
     ctx: Path,
     scope: Path,
+    raw_body: Path,
+}
+
+#[derive(Clone, Copy)]
+enum SpecialKind {
+    PartsCtx,
+    RequestScope,
+    RawBody,
 }
 
 impl SpecialTypePaths {
@@ -37,7 +46,20 @@ impl SpecialTypePaths {
         Ok(Self {
             ctx: syn::parse2(quote!(#apigate::PartsCtx))?,
             scope: syn::parse2(quote!(#apigate::RequestScope))?,
+            raw_body: syn::parse2(quote!(#apigate::RawBody))?,
         })
+    }
+
+    fn match_kind(&self, ty: &Type) -> Option<SpecialKind> {
+        if is_special_type(ty, &self.ctx) {
+            Some(SpecialKind::PartsCtx)
+        } else if is_special_type(ty, &self.scope) {
+            Some(SpecialKind::RequestScope)
+        } else if is_special_type(ty, &self.raw_body) {
+            Some(SpecialKind::RawBody)
+        } else {
+            None
+        }
     }
 }
 
@@ -67,23 +89,18 @@ fn classify_param(ty: &Type, special: &SpecialTypePaths) -> syn::Result<ParamSou
 
     match ty {
         Type::Reference(r) => classify_ref_param(ty, r, special),
-        other => {
-            if is_special_type(other, &special.ctx) {
-                return Err(syn::Error::new(
-                    other.span(),
-                    "`PartsCtx` parameter must be `&mut PartsCtx`",
-                ));
-            }
-
-            if is_special_type(other, &special.scope) {
-                return Err(syn::Error::new(
-                    other.span(),
-                    "`RequestScope` parameter must be `&mut RequestScope`",
-                ));
-            }
-
-            Ok(ParamSource::ScopeTake)
-        }
+        other => match special.match_kind(other) {
+            Some(SpecialKind::PartsCtx) => Err(syn::Error::new(
+                other.span(),
+                "`PartsCtx` parameter must be `&mut PartsCtx`",
+            )),
+            Some(SpecialKind::RequestScope) => Err(syn::Error::new(
+                other.span(),
+                "`RequestScope` parameter must be `&mut RequestScope`",
+            )),
+            Some(SpecialKind::RawBody) => Ok(ParamSource::RawBody),
+            None => Ok(ParamSource::ScopeTake),
+        },
     }
 }
 
@@ -94,32 +111,38 @@ fn classify_ref_param(
 ) -> syn::Result<ParamSource> {
     let inner = peel_type(&r.elem);
 
-    if is_special_type(inner, &special.ctx) {
-        return if r.mutability.is_some() {
-            Ok(ParamSource::PartsCtx)
-        } else {
-            Err(syn::Error::new(
-                original_ty.span(),
-                "`PartsCtx` parameter must be `&mut PartsCtx`",
-            ))
-        };
-    }
-
-    if is_special_type(inner, &special.scope) {
-        return if r.mutability.is_some() {
-            Ok(ParamSource::RequestScope)
-        } else {
-            Err(syn::Error::new(
-                original_ty.span(),
-                "`RequestScope` parameter must be `&mut RequestScope`",
-            ))
-        };
-    }
-
-    if r.mutability.is_some() {
-        Ok(ParamSource::ScopeMut(inner.clone()))
-    } else {
-        Ok(ParamSource::ScopeRef(inner.clone()))
+    match special.match_kind(inner) {
+        Some(SpecialKind::PartsCtx) => {
+            if r.mutability.is_some() {
+                Ok(ParamSource::PartsCtx)
+            } else {
+                Err(syn::Error::new(
+                    original_ty.span(),
+                    "`PartsCtx` parameter must be `&mut PartsCtx`",
+                ))
+            }
+        }
+        Some(SpecialKind::RequestScope) => {
+            if r.mutability.is_some() {
+                Ok(ParamSource::RequestScope)
+            } else {
+                Err(syn::Error::new(
+                    original_ty.span(),
+                    "`RequestScope` parameter must be `&mut RequestScope`",
+                ))
+            }
+        }
+        Some(SpecialKind::RawBody) => Err(syn::Error::new(
+            original_ty.span(),
+            "`RawBody` parameter must be taken by value (`RawBody`), not by reference",
+        )),
+        None => {
+            if r.mutability.is_some() {
+                Ok(ParamSource::ScopeMut(inner.clone()))
+            } else {
+                Ok(ParamSource::ScopeRef(inner.clone()))
+            }
+        }
     }
 }
 
@@ -193,7 +216,7 @@ fn validate_plans(plans: &[ParamPlan], sig: &syn::Signature, macro_name: &str) -
             ParamSource::RequestScope => s.seen_scope += 1,
             ParamSource::ScopeRef(_) => s.immut_borrowed_from_scope += 1,
             ParamSource::ScopeMut(_) => s.mut_borrowed_from_scope += 1,
-            ParamSource::ScopeTake => {}
+            ParamSource::ScopeTake | ParamSource::RawBody => {}
         }
     }
 
@@ -274,8 +297,17 @@ fn build_param_plans(
         let ty = (*pt.ty).clone();
         let source = classify_param(&ty, special)?;
 
+        if matches!(source, ParamSource::RawBody) && !matches!(mode, ExpansionMode::Map) {
+            return Err(syn::Error::new_spanned(
+                param,
+                "`RawBody` is only available in #[apigate::map]",
+            ));
+        }
+
         match &source {
-            ParamSource::ScopeTake if mode.keeps_first_owned_param() && !found_first_value => {
+            ParamSource::ScopeTake | ParamSource::RawBody
+                if mode.keeps_first_owned_param() && !found_first_value =>
+            {
                 found_first_value = true;
                 kept_param = Some(param.clone());
             }
@@ -294,6 +326,7 @@ fn build_bindings(
     ctx_ident: &syn::Ident,
     scope_ident: &syn::Ident,
 ) -> syn::Result<Vec<Stmt>> {
+    let mut raw_tokens = Vec::<TokenStream2>::new();
     let mut ctx_tokens = Vec::<TokenStream2>::new();
     let mut take_tokens = Vec::<TokenStream2>::new();
     let mut get_tokens = Vec::<TokenStream2>::new();
@@ -336,12 +369,19 @@ fn build_bindings(
                         .ok_or_else(|| #err)?;
                 });
             }
+            ParamSource::RawBody => {
+                let err = missing_from_scope_tokens(apigate, ty);
+                raw_tokens.push(quote! {
+                    let #pat: #ty = #scope_ident.raw_body_cloned().ok_or_else(|| #err)?;
+                });
+            }
         }
     }
 
     let mut stmts = Vec::new();
-    for tokens in ctx_tokens
+    for tokens in raw_tokens
         .iter()
+        .chain(ctx_tokens.iter())
         .chain(take_tokens.iter())
         .chain(get_tokens.iter())
         .chain(get_mut_tokens.iter())
