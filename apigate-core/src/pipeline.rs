@@ -1,11 +1,11 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use axum::body::Body;
+use axum::body::{Body, Bytes, to_bytes};
 use http::Extensions;
 
 use crate::PartsCtx;
-use crate::error::ApigateError;
+use crate::error::{ApigateError, ApigatePipelineError};
 
 // ---------------------------------------------------------------------------
 // RequestScope
@@ -20,6 +20,7 @@ pub struct RequestScope<'a> {
     shared: &'a Extensions,
     local: Extensions,
     body: Option<Body>,
+    raw_body: Option<Bytes>,
     body_limit: usize,
 }
 
@@ -29,6 +30,7 @@ impl<'a> RequestScope<'a> {
             shared,
             local: Extensions::new(),
             body: Some(body),
+            raw_body: None,
             body_limit,
         }
     }
@@ -43,6 +45,31 @@ impl<'a> RequestScope<'a> {
     /// Returns the maximum number of bytes generated pipelines may read.
     pub fn body_limit(&self) -> usize {
         self.body_limit
+    }
+
+    /// Reads the request body into memory (up to `body_limit`), caches it as the
+    /// raw body, and returns the bytes.
+    pub async fn read_body_bytes(&mut self) -> Result<Bytes, ApigateError> {
+        let body = self
+            .body
+            .take()
+            .ok_or_else(|| ApigateError::from(ApigatePipelineError::RequestBodyAlreadyConsumed))?;
+        let bytes = to_bytes(body, self.body_limit).await.map_err(|err| {
+            ApigateError::from(ApigatePipelineError::RequestBodyTooLarge(err.to_string()))
+        })?;
+        self.raw_body = Some(bytes.clone());
+        Ok(bytes)
+    }
+
+    /// Returns the raw request body bytes cached.
+    pub fn raw_body(&self) -> Option<&[u8]> {
+        self.raw_body.as_deref()
+    }
+
+    /// Returns an owned [`RawBody`] handle.
+    #[doc(hidden)]
+    pub fn raw_body_cloned(&self) -> Option<RawBody> {
+        self.raw_body.clone().map(RawBody)
     }
 
     /// Returns a shared reference to `T`.
@@ -86,6 +113,53 @@ pub type HookResult = Result<(), ApigateError>;
 /// Result type returned by `#[apigate::map]` functions.
 pub type MapResult<T> = Result<T, ApigateError>;
 
+// ---------------------------------------------------------------------------
+// RawBody
+// ---------------------------------------------------------------------------
+
+/// Raw request body bytes.
+///
+/// Declare it by value in a map signature to access the exact request bytes before typed parsing.
+#[derive(Clone, Debug)]
+pub struct RawBody(Bytes);
+
+impl RawBody {
+    /// Returns the raw body bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Returns the number of bytes in the body.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns `true` if the body is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl std::ops::Deref for RawBody {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for RawBody {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl From<RawBody> for Body {
+    fn from(raw: RawBody) -> Self {
+        Body::from(raw.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,6 +185,28 @@ mod tests {
         let bytes = to_bytes(body, 1024).await.unwrap();
         assert_eq!(&bytes[..], b"hello");
 
+        assert!(scope.take_body().is_none());
+    }
+
+    #[tokio::test]
+    async fn request_scope_read_body_bytes_caches_raw_body() {
+        let shared = Extensions::new();
+        let mut scope = RequestScope::new(&shared, Body::from("raw-bytes"), 1024);
+
+        assert!(scope.raw_body().is_none());
+        assert!(scope.raw_body_cloned().is_none());
+
+        let bytes = scope.read_body_bytes().await.expect("body read");
+        assert_eq!(&bytes[..], b"raw-bytes");
+
+        assert_eq!(scope.raw_body(), Some(&b"raw-bytes"[..]));
+        let cloned = scope.raw_body_cloned().expect("raw body cached");
+        assert_eq!(cloned.as_bytes(), b"raw-bytes");
+        assert_eq!(&*cloned, b"raw-bytes");
+        assert_eq!(cloned.len(), 9);
+        assert!(!cloned.is_empty());
+
+        // The body has been consumed.
         assert!(scope.take_body().is_none());
     }
 
