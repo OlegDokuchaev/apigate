@@ -1,3 +1,4 @@
+use serde::Serialize;
 use apigate::{HookResult, MapResult, PartsCtx, RequestScope};
 
 struct AppState;
@@ -9,6 +10,7 @@ struct Input {
     value: String,
 }
 
+#[derive(Serialize)]
 struct Output {
     value: String,
 }

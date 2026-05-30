@@ -1,0 +1,16 @@
+warning: unused import: `apigate::MapResult`
+ --> tests/ui/fail/map_borrows_local.rs:1:5
+  |
+1 | use apigate::MapResult;
+  |     ^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0515]: cannot return value referencing local variable `computed`
+  --> tests/ui/fail/map_borrows_local.rs:20:5
+   |
+20 |     Ok(Output { name: &computed })
+   |     ^^^^^^^^^^^^^^^^^^---------^^^
+   |     |                 |
+   |     |                 `computed` is borrowed here
+   |     returns a value referencing data owned by the current function

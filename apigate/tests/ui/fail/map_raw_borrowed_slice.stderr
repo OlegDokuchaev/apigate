@@ -1,0 +1,8 @@
+error[E0515]: cannot return value referencing local variable `raw`
+ --> tests/ui/fail/map_raw_borrowed_slice.rs:6:5
+  |
+6 |     Ok(&raw.as_bytes()[..])
+  |     ^^^^---^^^^^^^^^^^^^^^^
+  |     |   |
+  |     |   `raw` is borrowed here
+  |     returns a value referencing data owned by the current function
