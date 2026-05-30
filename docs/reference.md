@@ -287,6 +287,29 @@ Mapping behavior:
 | `form = T` | Serialized with `serde_urlencoded`; sent as a form body for non-GET/HEAD and as query string for GET/HEAD. |
 | no body data | The map takes `RawBody`; its output (`impl Into<Body>`) is sent as the new body. |
 
+### Borrowing map output
+
+A typed (`json`/`form`) map serializes its output *inside* the generated wrapper,
+while `input` is still alive, so the output may borrow from `input` (or shared
+`&State`) instead of allocating — no `.to_string()` for pass-through fields:
+
+```rust
+#[derive(serde::Serialize)]
+struct Out<'a> {
+    title: &'a str, // a slice of `input`
+    code: &'static str,
+}
+
+#[apigate::map]
+async fn remap(input: Form) -> apigate::MapResult<Out<'_>> {
+    Ok(Out { title: input.title.trim(), code: "P" })
+}
+```
+
+Borrow what you do not own (`input`, `&State`); values you compute locally, move
+into the output (borrowing a local fails to compile). One map serves both `json`
+and `form` routes — the wrapper serializes per the route's body kind.
+
 ### Raw Request Bytes
 
 Maps can read the exact request bytes through `apigate::RawBody`. These are the
@@ -330,16 +353,28 @@ with `&T` shared state and `&mut PartsCtx`, unlike `&mut RequestScope`.
 
 A route can also declare `map` with no `json`/`form`. The map then takes
 `RawBody` as its input and returns any `impl Into<Body>` (`RawBody`, `Bytes`,
-`Vec<u8>`, `String`):
+`Vec<u8>`, `String`). Returning `raw` forwards the bytes with no copy:
 
 ```rust
 #[apigate::map]
-async fn forward_raw(raw: apigate::RawBody) -> apigate::MapResult<Vec<u8>> {
-    Ok(raw.as_bytes().to_vec())
+async fn forward_raw(raw: apigate::RawBody) -> apigate::MapResult<apigate::RawBody> {
+    Ok(raw) // forward the exact bytes, no allocation
 }
 
 #[apigate::post("/raw", map = forward_raw)]
 async fn raw() {}
+```
+
+To forward part of the body, return a zero-copy `Bytes` view (a reference-counted
+slice that shares the buffer) via `raw.slice(range)` or `raw.into_bytes()` — not a
+borrowed `&[u8]`, which cannot outlive the map:
+
+```rust
+#[apigate::map]
+async fn first_line(raw: apigate::RawBody) -> apigate::MapResult<apigate::Bytes> {
+    let end = raw.iter().position(|&b| b == b'\n').map_or(raw.len(), |i| i + 1);
+    Ok(raw.slice(..end)) // zero-copy; use raw.into_bytes() for the whole body
+}
 ```
 
 `RawBody` requires a buffered body, so it is not available for `form` GET/HEAD
