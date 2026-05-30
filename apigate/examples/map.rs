@@ -29,7 +29,7 @@ struct PublicBuyInput {
 struct ServiceBuyInput {
     sale_ids: Vec<Uuid>,
     promo_code: Option<String>,
-    payment_mode: String,
+    payment_mode: &'static str,
     source: &'static str,
 }
 
@@ -44,9 +44,9 @@ struct LegacyFormPublic {
 }
 
 #[derive(Debug, Serialize)]
-struct LegacyFormService {
-    title: String,
-    category_code: String,
+struct LegacyFormService<'a> {
+    title: &'a str,
+    category_code: &'static str,
 }
 
 // ---------------------------------------------------------------------------
@@ -108,8 +108,7 @@ async fn remap_buy_json(
             "bonus"
         } else {
             "money"
-        }
-        .to_string(),
+        },
         source: if config.api_key.is_empty() {
             "unknown"
         } else {
@@ -120,15 +119,14 @@ async fn remap_buy_json(
 
 /// Form transformation: category -> category_code.
 #[apigate::map]
-async fn remap_legacy_form(input: LegacyFormPublic) -> apigate::MapResult<LegacyFormService> {
+async fn remap_legacy_form(input: LegacyFormPublic) -> apigate::MapResult<LegacyFormService<'_>> {
     Ok(LegacyFormService {
-        title: input.title.trim().to_string(),
+        title: input.title.trim(),
         category_code: match input.category.trim().to_lowercase().as_str() {
             "pets" => "P",
             "items" => "I",
             _ => "U",
-        }
-        .to_string(),
+        },
     })
 }
 
