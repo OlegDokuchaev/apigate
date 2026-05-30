@@ -20,6 +20,25 @@ enum ParamSource {
     RawBody,
 }
 
+impl ParamSource {
+    /// Whether binding this parameter reads the generated `ctx` argument.
+    fn binds_ctx(&self) -> bool {
+        matches!(self, Self::PartsCtx)
+    }
+
+    /// Whether binding this parameter reads the generated `scope` argument.
+    fn binds_scope(&self) -> bool {
+        matches!(
+            self,
+            Self::RequestScope
+                | Self::ScopeRef(_)
+                | Self::ScopeMut(_)
+                | Self::ScopeTake
+                | Self::RawBody
+        )
+    }
+}
+
 #[derive(Clone)]
 struct ParamPlan {
     pat: Pat,
@@ -276,14 +295,19 @@ fn missing_from_scope_tokens(apigate: &TokenStream2, ty: &Type) -> TokenStream2 
     }
 }
 
+/// The map input parameter kept as a direct argument (the first owned param).
+struct KeptInput {
+    param: FnArg,
+    is_raw: bool,
+}
+
 fn build_param_plans(
     f: &ItemFn,
     special: &SpecialTypePaths,
     mode: ExpansionMode,
-) -> syn::Result<(Vec<ParamPlan>, Option<FnArg>)> {
+) -> syn::Result<(Vec<ParamPlan>, Option<KeptInput>)> {
     let mut plans = Vec::new();
-    let mut kept_param: Option<FnArg> = None;
-    let mut found_first_value = false;
+    let mut kept_param: Option<KeptInput> = None;
 
     for param in f.sig.inputs.iter() {
         let FnArg::Typed(pt) = param else {
@@ -306,10 +330,12 @@ fn build_param_plans(
 
         match &source {
             ParamSource::ScopeTake | ParamSource::RawBody
-                if mode.keeps_first_owned_param() && !found_first_value =>
+                if mode.keeps_first_owned_param() && kept_param.is_none() =>
             {
-                found_first_value = true;
-                kept_param = Some(param.clone());
+                kept_param = Some(KeptInput {
+                    param: param.clone(),
+                    is_raw: matches!(source, ParamSource::RawBody),
+                });
             }
             _ => {
                 plans.push(ParamPlan { pat, ty, source });
@@ -393,6 +419,42 @@ fn build_bindings(
     Ok(stmts)
 }
 
+/// Builds a serde map wrapper body: run the user body in a non-`move` `async`
+/// block, then serialize it according to the runtime [`MapBodyKind`] chosen by the route.
+fn serde_map_block(
+    apigate: &TokenStream2,
+    kind_ident: &syn::Ident,
+    original: Vec<Stmt>,
+) -> syn::Block {
+    syn::parse_quote!({
+        let __apigate_output = {
+            let __apigate_result: #apigate::MapResult<_> = async { #(#original)* }.await;
+            __apigate_result
+        }?;
+        match #kind_ident {
+            #apigate::__private::MapBodyKind::Json => {
+                #apigate::__private::serde_json::to_string(&__apigate_output).map_err(|__apigate_err| {
+                    #apigate::ApigateError::from(
+                        #apigate::ApigatePipelineError::FailedSerializeMappedJson(
+                            __apigate_err.to_string(),
+                        ),
+                    )
+                })
+            }
+            #apigate::__private::MapBodyKind::Form => {
+                #apigate::__private::serde_urlencoded::to_string(&__apigate_output)
+                    .map_err(|__apigate_err| {
+                        #apigate::ApigateError::from(
+                            #apigate::ApigatePipelineError::FailedSerializeMappedForm(
+                                __apigate_err.to_string(),
+                            ),
+                        )
+                    })
+            }
+        }
+    })
+}
+
 // ---------------------------------------------------------------------------
 // expand_fn_params
 // ---------------------------------------------------------------------------
@@ -431,24 +493,56 @@ pub(crate) fn expand_fn_params(
 
     validate_plans(&plans, &f.sig, macro_name)?;
 
-    // Rewrite parameter list: [input,] ctx, scope
-    f.sig.inputs.clear();
-    if let Some(param) = kept_param {
-        f.sig.inputs.push(param);
-    }
-    f.sig
-        .inputs
-        .push(syn::parse_quote!(#ctx_ident: &mut #apigate::PartsCtx<'_>));
-    f.sig
-        .inputs
-        .push(syn::parse_quote!(#scope_ident: &mut #apigate::RequestScope<'_>));
+    // A map with a typed (non-`RawBody`) input serializes its output *inside* the wrapper.
+    let serde_mode =
+        matches!(mode, ExpansionMode::Map) && kept_param.as_ref().is_some_and(|k| !k.is_raw);
+    let kind_ident = format_ident!("__apigate_kind");
 
-    let generated_stmts = build_bindings(&plans, &apigate, &ctx_ident, &scope_ident)?;
-    if !generated_stmts.is_empty() {
-        let original = std::mem::take(&mut f.block.stmts);
-        f.block.stmts = generated_stmts;
-        f.block.stmts.extend(original);
+    // Only the bindings reference the generated `ctx`/`scope` params; name them
+    // `_` when nothing uses them so generated wrappers stay warning-free.
+    let ctx_used = plans.iter().any(|p| p.source.binds_ctx());
+    let scope_used = plans.iter().any(|p| p.source.binds_scope());
+    let ctx_pat: Pat = if ctx_used {
+        syn::parse_quote!(#ctx_ident)
+    } else {
+        syn::parse_quote!(_)
+    };
+    let scope_pat: Pat = if scope_used {
+        syn::parse_quote!(#scope_ident)
+    } else {
+        syn::parse_quote!(_)
+    };
+
+    // Rewrite parameter list: [input,] ctx, scope[, kind]
+    f.sig.inputs.clear();
+    if let Some(kept) = kept_param {
+        f.sig.inputs.push(kept.param);
     }
+    f.sig
+        .inputs
+        .push(syn::parse_quote!(#ctx_pat: &mut #apigate::PartsCtx<'_>));
+    f.sig
+        .inputs
+        .push(syn::parse_quote!(#scope_pat: &mut #apigate::RequestScope<'_>));
+
+    let bindings = build_bindings(&plans, &apigate, &ctx_ident, &scope_ident)?;
+
+    if serde_mode {
+        f.sig
+            .inputs
+            .push(syn::parse_quote!(#kind_ident: #apigate::__private::MapBodyKind));
+        f.sig.output = syn::parse_quote!(-> #apigate::MapResult<::std::string::String>);
+    }
+
+    // Prepend the parameter bindings to the user body
+    let original = std::mem::take(&mut f.block.stmts);
+    let body_stmts = if serde_mode {
+        serde_map_block(&apigate, &kind_ident, original).stmts
+    } else {
+        original
+    };
+    f.block.stmts = bindings;
+    f.block.stmts.extend(body_stmts);
 
     Ok(quote!(#f))
 }

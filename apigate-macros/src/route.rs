@@ -50,6 +50,12 @@ impl MethodKind {
         }
     }
 
+    /// Whether requests for this method carry their data in the query string
+    /// rather than the request body.
+    fn body_in_query(self) -> bool {
+        matches!(self, Self::Get | Self::Head)
+    }
+
     /// Emits `apigate::Method::*` variant tokens.
     fn to_tokens(self, apigate_path: &TokenStream2) -> TokenStream2 {
         match self {
@@ -296,6 +302,7 @@ pub(crate) fn expand_route_from_fn(
         matched.args.map.as_ref(),
         matched.args.path_type.as_ref(),
         matched.args.query_type.as_ref(),
+        matched.kind.body_in_query(),
         &mut generated_items,
     )?;
 

@@ -18,6 +18,7 @@ pub(crate) fn generate_pipeline_wrapper(
     map_fn: Option<&Path>,
     path_type: Option<&Type>,
     query_type: Option<&Type>,
+    body_in_query: bool,
     generated_items: &mut Vec<Item>,
 ) -> Result<TokenStream2> {
     let has_hooks = !hooks.is_empty();
@@ -41,7 +42,7 @@ pub(crate) fn generate_pipeline_wrapper(
     } else {
         quote!()
     };
-    let body_phase = build_body_phase(apigate_path, data, map_fn, &f.sig.ident)?;
+    let body_phase = build_body_phase(apigate_path, data, map_fn, &f.sig.ident, body_in_query)?;
 
     let item: Item = syn::parse_quote! {
         #[doc(hidden)]
@@ -99,19 +100,17 @@ fn build_body_phase(
     data: &DataKind,
     map_fn: Option<&Path>,
     route_fn_ident: &Ident,
+    body_in_query: bool,
 ) -> Result<TokenStream2> {
     match (map_fn, data) {
-        (None, DataKind::None | DataKind::Multipart) => {
-            let take = take_body_expr(apigate_path);
-            Ok(quote!(#take))
-        }
+        (None, DataKind::None | DataKind::Multipart) => Ok(take_body_expr(apigate_path)),
         (Some(_), DataKind::Multipart) => Err(syn::Error::new_spanned(
             route_fn_ident,
             "`map` is not supported with `multipart`",
         )),
         (Some(map_fn), DataKind::None) => Ok(none_map_phase(apigate_path, map_fn)),
         (map_fn, DataKind::Json(ty)) => Ok(json_phase(apigate_path, ty, map_fn)),
-        (map_fn, DataKind::Form(ty)) => Ok(form_phase(apigate_path, ty, map_fn)),
+        (map_fn, DataKind::Form(ty)) => Ok(form_phase(apigate_path, ty, map_fn, body_in_query)),
     }
 }
 
@@ -152,9 +151,7 @@ fn json_phase(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) -> 
             let bytes = scope.read_body_bytes().await?;
             let input: #ty = #apigate_path::__private::serde_json::from_slice(&bytes)
                 .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidJsonBody(err.to_string())))?;
-            let output = #map_fn(input, &mut ctx, &mut scope).await?;
-            let new_body = #apigate_path::__private::serde_json::to_vec(&output)
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::FailedSerializeMappedJson(err.to_string())))?;
+            let new_body = #map_fn(input, &mut ctx, &mut scope, #apigate_path::__private::MapBodyKind::Json).await?;
             ctx.headers_mut().insert(
                 #apigate_path::__private::http::header::CONTENT_TYPE,
                 #apigate_path::__private::http::HeaderValue::from_static("application/json"),
@@ -175,19 +172,17 @@ fn json_phase(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) -> 
 // Form phase
 // ---------------------------------------------------------------------------
 
-fn form_phase(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) -> TokenStream2 {
-    let take = take_body_expr(apigate_path);
-
-    let get_branch = form_get_branch(apigate_path, ty, map_fn, &take);
-    let post_branch = form_post_branch(apigate_path, ty, map_fn);
-
-    quote! {
-        let method = ctx.method().clone();
-        if method == #apigate_path::__private::http::Method::GET
-            || method == #apigate_path::__private::http::Method::HEAD
-        {
-            #get_branch
-        } else {
+fn form_phase(
+    apigate_path: &TokenStream2,
+    ty: &Type,
+    map_fn: Option<&Path>,
+    body_in_query: bool,
+) -> TokenStream2 {
+    if body_in_query {
+        form_get_branch(apigate_path, ty, map_fn)
+    } else {
+        let post_branch = form_post_branch(apigate_path, ty, map_fn);
+        quote! {
             let content_type = ctx
                 .headers()
                 .get(#apigate_path::__private::http::header::CONTENT_TYPE)
@@ -201,30 +196,15 @@ fn form_phase(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) -> 
     }
 }
 
-fn form_get_branch(
-    apigate_path: &TokenStream2,
-    ty: &Type,
-    map_fn: Option<&Path>,
-    take: &TokenStream2,
-) -> TokenStream2 {
+fn form_get_branch(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) -> TokenStream2 {
+    let take = take_body_expr(apigate_path);
     match map_fn {
         Some(map_fn) => quote! {
             let raw = ctx.uri().query().unwrap_or_default();
             let input: #ty = #apigate_path::__private::serde_urlencoded::from_str(raw)
                 .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidFormQuery(err.to_string())))?;
-            let output = #map_fn(input, &mut ctx, &mut scope).await?;
-            let encoded = #apigate_path::__private::serde_urlencoded::to_string(&output)
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::FailedSerializeMappedForm(err.to_string())))?;
-            let path = ctx.uri().path().to_string();
-            let mut path_and_query = path;
-            if !encoded.is_empty() {
-                path_and_query.push('?');
-                path_and_query.push_str(&encoded);
-            }
-            *ctx.uri_mut() = #apigate_path::__private::http::Uri::builder()
-                .path_and_query(path_and_query)
-                .build()
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::FailedRebuildUri(err.to_string())))?;
+            let encoded = #map_fn(input, &mut ctx, &mut scope, #apigate_path::__private::MapBodyKind::Form).await?;
+            ctx.set_encoded_query(&encoded)?;
             #take
         },
         None => quote! {
@@ -242,15 +222,13 @@ fn form_post_branch(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path
             let bytes = scope.read_body_bytes().await?;
             let input: #ty = #apigate_path::__private::serde_urlencoded::from_bytes(&bytes)
                 .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidFormBody(err.to_string())))?;
-            let output = #map_fn(input, &mut ctx, &mut scope).await?;
-            let encoded = #apigate_path::__private::serde_urlencoded::to_string(&output)
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::FailedSerializeMappedForm(err.to_string())))?;
+            let new_body = #map_fn(input, &mut ctx, &mut scope, #apigate_path::__private::MapBodyKind::Form).await?;
             ctx.headers_mut().insert(
                 #apigate_path::__private::http::header::CONTENT_TYPE,
                 #apigate_path::__private::http::HeaderValue::from_static("application/x-www-form-urlencoded"),
             );
             ctx.headers_mut().remove(#apigate_path::__private::http::header::CONTENT_LENGTH);
-            Ok(#apigate_path::__private::axum::body::Body::from(encoded))
+            Ok(#apigate_path::__private::axum::body::Body::from(new_body))
         },
         None => quote! {
             let bytes = scope.read_body_bytes().await?;
