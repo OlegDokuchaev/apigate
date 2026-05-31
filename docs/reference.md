@@ -86,7 +86,7 @@ Route arguments:
 | `form = T` | Validates `application/x-www-form-urlencoded` data as `T`. With `map`, serializes mapped output back as form data or query data for GET/HEAD. |
 | `multipart` | Enables multipart passthrough. The body is not read or buffered. |
 | `before = [...]` | Hooks executed before proxying. They run in the listed order. |
-| `map = fn_name` | Request transformation. Works with `json`, `form`, or no body data (the map then takes a `RawBody` input). Not supported with `multipart` routes. |
+| `map = fn_name` | Request transformation. Works with `json`, `form`, or no body data (the map then takes a `RawBody` input). Return a value to replace the body, or `()` to validate only and forward the body unchanged. Not supported with `multipart` routes. |
 | `policy = "name"` | Route-level policy override. |
 
 `query = T` is independent from body handling and can be combined with `json`, `form`, or `multipart`. Only one body mode can be used per route: `json`, `form`, or `multipart`.
@@ -285,7 +285,8 @@ Mapping behavior:
 |---|---|
 | `json = T` | Serialized with `serde_json` and sent as a new JSON body. |
 | `form = T` | Serialized with `serde_urlencoded`; sent as a form body for non-GET/HEAD and as query string for GET/HEAD. |
-| no body data | The map takes `RawBody`; its output (`impl Into<Body>`) is sent as the new body. |
+| no body data | The map takes `RawBody`; its output (`RawBody`/`Bytes`/`Vec<u8>`/`String`, or `()` to keep) is sent as the new body. |
+| any of the above, returning `()` | Validate-only: the original request body is forwarded unchanged (see below). |
 
 ### Borrowing map output
 
@@ -309,6 +310,34 @@ async fn remap(input: Form) -> apigate::MapResult<Out<'_>> {
 Borrow what you do not own (`input`, `&State`); values you compute locally, move
 into the output (borrowing a local fails to compile). One map serves both `json`
 and `form` routes — the wrapper serializes per the route's body kind.
+
+### Validate-only maps
+
+A map that returns `()` does **not** replace the body: the original request bytes
+are forwarded upstream unchanged. Use it to validate or inspect a typed body (and
+optionally mutate headers via `&mut PartsCtx`) without paying for re-serialization
+— and without risking byte drift (field order, whitespace, number formatting):
+
+```rust
+#[apigate::map]
+async fn validate(input: CreateUser, ctx: &mut apigate::PartsCtx) -> apigate::MapResult<()> {
+    if input.email.is_empty() {
+        return Err(apigate::ApigateError::bad_request("email required"));
+    }
+    ctx.set_header("x-validated", "1")?;
+    Ok(()) // original body forwarded as-is
+}
+
+#[apigate::post("/users", json = CreateUser, map = validate)]
+async fn create_user() {}
+```
+
+The typed input is still parsed first, so malformed bodies are rejected before the
+map runs. This works for `json`, `form`, and `RawBody` maps alike.
+
+Only `()` means "keep". `Option<T>` is a normal serialized value — `Some(v)`
+becomes the body `v`, and `None` becomes a JSON `null` (or empty form), **not** a
+kept body. Return `()` to keep, a value (or `Option<T>`) to replace.
 
 ### Raw Request Bytes
 
@@ -376,6 +405,22 @@ async fn first_line(raw: apigate::RawBody) -> apigate::MapResult<apigate::Bytes>
     Ok(raw.slice(..end)) // zero-copy; use raw.into_bytes() for the whole body
 }
 ```
+
+A raw map can also return `()` to validate or inspect the bytes without replacing
+the body — the original request body is forwarded unchanged (same as a typed
+validate-only map):
+
+```rust
+#[apigate::map]
+async fn inspect_raw(raw: apigate::RawBody, ctx: &mut apigate::PartsCtx) -> apigate::MapResult<()> {
+    ctx.set_header("x-raw-len", raw.len().to_string())?;
+    Ok(()) // body forwarded as-is
+}
+```
+
+A raw map's output is moved into the body by type: `RawBody`, `Bytes`, `Vec<u8>`,
+`String`, `&'static [u8]`/`&'static str`, or `()` (keep). For any other
+`Into<Body>` type, convert it yourself with `Ok(value.into())`.
 
 `RawBody` requires a buffered body, so it is not available for `form` GET/HEAD
 routes (which read the query string instead); requesting it there fails with a
