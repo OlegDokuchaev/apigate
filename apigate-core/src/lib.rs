@@ -34,8 +34,7 @@ pub use observability::{
 };
 pub use parts_ctx::PartsCtx;
 pub use pipeline::{
-    HookResult, MapBodyKind, MapResult, PipelineFn, PipelineFuture, PipelineResult, RawBody,
-    RequestScope,
+    HookResult, MapResult, PipelineFn, PipelineFuture, PipelineResult, RawBody, RequestScope,
 };
 pub use route::RewriteSpec;
 #[doc(hidden)]
