@@ -94,6 +94,28 @@ async fn remap_buy(input: BuyInput) -> apigate::MapResult<BuyService> {
     })
 }
 
+// validate-only map: returns `()`, so the original request body must be
+// forwarded byte-for-byte. It still parses the input (rejecting bad bodies)
+// and mutates headers.
+#[apigate::map]
+async fn validate_buy(input: BuyInput, ctx: &mut apigate::PartsCtx<'_>) -> apigate::MapResult<()> {
+    if input.public_id.is_empty() {
+        return Err(apigate::ApigateError::bad_request("empty public_id"));
+    }
+    ctx.set_header("x-validated", "yes")?;
+    Ok(())
+}
+
+// Schema-less validate-only map: inspects the raw bytes and returns `()`, so the
+// original body is forwarded unchanged (no re-serialization).
+#[apigate::map]
+async fn inspect_raw(raw: apigate::RawBody) -> apigate::MapResult<()> {
+    if raw.is_empty() {
+        return Err(apigate::ApigateError::bad_request("empty body"));
+    }
+    Ok(())
+}
+
 #[apigate::service(name = "sales", prefix = "/sales")]
 mod sales {
     use super::*;
@@ -103,6 +125,12 @@ mod sales {
 
     #[apigate::post("/buy", json = BuyInput, map = remap_buy)]
     async fn buy() {}
+
+    #[apigate::post("/check", json = BuyInput, map = validate_buy)]
+    async fn check() {}
+
+    #[apigate::post("/inspect", map = inspect_raw)]
+    async fn inspect() {}
 }
 
 async fn app(base_url: String) -> Router {
@@ -164,6 +192,99 @@ async fn json_map_rewrites_body_and_content_type() {
     assert_eq!(echo.uri, "/buy");
     assert_eq!(echo.content_type.as_deref(), Some("application/json"));
     assert_eq!(echo.body, r#"{"internal_id":"svc-1"}"#);
+}
+
+#[tokio::test]
+async fn validate_only_map_keeps_original_body() {
+    let upstream = support::spawn_upstream(Router::new().fallback(echo)).await;
+    let router = app(upstream.url()).await;
+
+    // Body has extra whitespace and field order a re-serialization would change;
+    // a validate-only map must forward these exact bytes.
+    let original = r#"{ "public_id" : "42" }"#;
+    let response = support::send_request(
+        router,
+        Request::builder()
+            .method(Method::POST)
+            .uri("/sales/check")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(original))
+            .unwrap(),
+    )
+    .await;
+
+    let (status, _, body) = support::response_text(response).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let echo: EchoBody = serde_json::from_str(&body).unwrap();
+    assert_eq!(echo.uri, "/check");
+    // Body forwarded byte-for-byte (NOT re-serialized: whitespace/order preserved).
+    assert_eq!(echo.body, original);
+}
+
+#[tokio::test]
+async fn validate_only_map_still_rejects_invalid_body() {
+    let upstream = support::spawn_upstream(Router::new().fallback(echo)).await;
+    let router = app(upstream.url()).await;
+
+    // Missing required field -> input parse fails before the map runs.
+    let response = support::send_request(
+        router,
+        Request::builder()
+            .method(Method::POST)
+            .uri("/sales/check")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"wrong":"field"}"#))
+            .unwrap(),
+    )
+    .await;
+
+    let (status, _, _) = support::response_text(response).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn raw_validate_only_map_keeps_original_body() {
+    let upstream = support::spawn_upstream(Router::new().fallback(echo)).await;
+    let router = app(upstream.url()).await;
+
+    // Arbitrary (non-JSON) bytes: a schema-less validate-only map forwards them as-is.
+    let original = "any-raw-bytes-\x00\x01-here";
+    let response = support::send_request(
+        router,
+        Request::builder()
+            .method(Method::POST)
+            .uri("/sales/inspect")
+            .body(Body::from(original))
+            .unwrap(),
+    )
+    .await;
+
+    let (status, _, body) = support::response_text(response).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let echo: EchoBody = serde_json::from_str(&body).unwrap();
+    assert_eq!(echo.uri, "/inspect");
+    assert_eq!(echo.body, original);
+}
+
+#[tokio::test]
+async fn raw_validate_only_map_rejects_empty_body() {
+    let upstream = support::spawn_upstream(Router::new().fallback(echo)).await;
+    let router = app(upstream.url()).await;
+
+    let response = support::send_request(
+        router,
+        Request::builder()
+            .method(Method::POST)
+            .uri("/sales/inspect")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+
+    let (status, _, _) = support::response_text(response).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

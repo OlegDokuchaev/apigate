@@ -7,6 +7,7 @@ fn macro_param_expansion() {
     t.pass("tests/ui/pass/map_raw_body.rs");
     t.pass("tests/ui/pass/map_raw_output.rs");
     t.pass("tests/ui/pass/map_borrowed_output.rs");
+    t.pass("tests/ui/pass/map_validate_only.rs");
     t.compile_fail("tests/ui/fail/hook_not_async.rs");
     t.compile_fail("tests/ui/fail/ctx_not_mut.rs");
     t.compile_fail("tests/ui/fail/scope_with_ref_param.rs");
@@ -15,6 +16,7 @@ fn macro_param_expansion() {
     t.compile_fail("tests/ui/fail/raw_body_in_hook.rs");
     t.compile_fail("tests/ui/fail/map_borrows_local.rs");
     t.compile_fail("tests/ui/fail/map_raw_borrowed_slice.rs");
+    t.compile_fail("tests/ui/fail/map_output_not_serialize.rs");
     t.compile_fail("tests/ui/fail/route_outside_service.rs");
     t.compile_fail("tests/ui/fail/route_unknown_arg.rs");
 }

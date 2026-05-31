@@ -1,8 +1,14 @@
-error[E0515]: cannot return value referencing local variable `raw`
- --> tests/ui/fail/map_raw_borrowed_slice.rs:6:5
+error[E0597]: `raw` does not live long enough
+ --> tests/ui/fail/map_raw_borrowed_slice.rs:6:9
   |
+4 | #[apigate::map]
+  | --------------- value captured here by coroutine
+5 | async fn bad(raw: apigate::RawBody) -> apigate::MapResult<&'static [u8]> {
+  |              --- binding `raw` declared here
 6 |     Ok(&raw.as_bytes()[..])
-  |     ^^^^---^^^^^^^^^^^^^^^^
+  |     ----^^^----------------
   |     |   |
-  |     |   `raw` is borrowed here
-  |     returns a value referencing data owned by the current function
+  |     |   borrowed value does not live long enough
+  |     returning this value requires that `raw` is borrowed for `'static`
+7 | }
+  | - `raw` dropped here while still borrowed
