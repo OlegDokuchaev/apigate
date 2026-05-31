@@ -50,6 +50,15 @@ struct LegacyFormService<'a> {
 }
 
 // ---------------------------------------------------------------------------
+// Validate-only map types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct SignupInput {
+    email: String,
+}
+
+// ---------------------------------------------------------------------------
 // Raw body map types
 // ---------------------------------------------------------------------------
 
@@ -149,6 +158,19 @@ async fn verify_and_remap(
     })
 }
 
+/// Validate-only map: returns `()`, so the original request body is forwarded upstream unchanged.
+#[apigate::map]
+async fn validate_signup(
+    input: SignupInput,
+    ctx: &mut apigate::PartsCtx,
+) -> apigate::MapResult<()> {
+    if !input.email.contains('@') {
+        return Err(apigate::ApigateError::bad_request("invalid email"));
+    }
+    ctx.set_header("x-validated", "1")?;
+    Ok(())
+}
+
 /// No `json`/`form`: `RawBody` is the map input and the output is any `impl Into<Body>`.
 #[apigate::map]
 async fn forward_raw(
@@ -178,6 +200,10 @@ mod sales {
     /// Typed body + raw-byte signature verification.
     #[apigate::post("/events", json = WebhookEvent, map = verify_and_remap)]
     async fn events() {}
+
+    /// Validate-only: parse and check the body, forward it unchanged.
+    #[apigate::post("/signup", json = SignupInput, map = validate_signup)]
+    async fn signup() {}
 
     /// No schema: inspect and forward the exact body.
     #[apigate::post("/raw", map = forward_raw)]
@@ -214,6 +240,8 @@ Raw + json map:  curl -X POST -H 'content-type: application/json' -H 'x-signatur
                    -d '{webhook}' http://{listen}/sales/events
 Bad signature:   curl -X POST -H 'content-type: application/json' -H 'x-signature: deadbeef' \
                    -d '{webhook}' http://{listen}/sales/events
+Validate-only:   curl -X POST -H 'content-type: application/json' \
+                   -d '{{\"email\":\"a@b.com\"}}' http://{listen}/sales/signup
 Raw map:         curl -X POST --data-binary 'any-raw-bytes-here' http://{listen}/sales/raw
 
 Upstream:        caddy run --config apigate/examples/upstream/Caddyfile

@@ -9,7 +9,7 @@
 | `tower_logging` | External `tower_http::TraceLayer` added through `.with_router(...)`. |
 | `runtime_tuning` | Listener socket tuning plus upstream hyper-util client/connector settings. |
 | `path` | Path validation (UUID), path data in hooks (`&T`), and path data in map functions. |
-| `map` | JSON and form transformations (with borrowing outputs), shared state in a map, raw-byte signature verification beside a typed `json` input, and a schema-less `RawBody` map. |
+| `map` | JSON and form transformations (with borrowing outputs), validate-only maps (`-> ()`), shared state in a map, raw-byte signature verification beside a typed `json` input, and a schema-less `RawBody` map. |
 | `policy` | HeaderSticky + ConsistentHash, PathSticky, LeastRequest, LeastTime, and RoundRobin. |
 | `multipart` | Multipart upload passthrough with and without auth. |
 
