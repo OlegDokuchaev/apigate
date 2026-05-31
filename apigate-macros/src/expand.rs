@@ -1,8 +1,12 @@
 use proc_macro::TokenStream;
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::spanned::Spanned;
-use syn::{FnArg, ItemFn, Pat, Path, PathArguments, Stmt, Type, TypePath, TypeReference};
+use syn::visit_mut::VisitMut;
+use syn::{
+    FnArg, ItemFn, Lifetime, Pat, Path, PathArguments, ReturnType, Stmt, Type, TypePath,
+    TypeReference, WherePredicate,
+};
 
 use crate::apigate_crate_path;
 
@@ -295,19 +299,13 @@ fn missing_from_scope_tokens(apigate: &TokenStream2, ty: &Type) -> TokenStream2 
     }
 }
 
-/// The map input parameter kept as a direct argument (the first owned param).
-struct KeptInput {
-    param: FnArg,
-    is_raw: bool,
-}
-
 fn build_param_plans(
     f: &ItemFn,
     special: &SpecialTypePaths,
     mode: ExpansionMode,
-) -> syn::Result<(Vec<ParamPlan>, Option<KeptInput>)> {
+) -> syn::Result<(Vec<ParamPlan>, Option<FnArg>)> {
     let mut plans = Vec::new();
-    let mut kept_param: Option<KeptInput> = None;
+    let mut kept_param: Option<FnArg> = None;
 
     for param in f.sig.inputs.iter() {
         let FnArg::Typed(pt) = param else {
@@ -332,10 +330,7 @@ fn build_param_plans(
             ParamSource::ScopeTake | ParamSource::RawBody
                 if mode.keeps_first_owned_param() && kept_param.is_none() =>
             {
-                kept_param = Some(KeptInput {
-                    param: param.clone(),
-                    is_raw: matches!(source, ParamSource::RawBody),
-                });
+                kept_param = Some(param.clone());
             }
             _ => {
                 plans.push(ParamPlan { pat, ty, source });
@@ -419,40 +414,133 @@ fn build_bindings(
     Ok(stmts)
 }
 
-/// Builds a serde map wrapper body: run the user body in a non-`move` `async`
-/// block, then serialize it according to the runtime [`MapBodyKind`] chosen by the route.
-fn serde_map_block(
-    apigate: &TokenStream2,
-    kind_ident: &syn::Ident,
-    original: Vec<Stmt>,
-) -> syn::Block {
-    syn::parse_quote!({
-        let __apigate_output = {
+/// Runs the user body in a non-`move` `async` block and yields its `MapResult` output.
+fn run_user_body(apigate: &TokenStream2, original: &[Stmt]) -> TokenStream2 {
+    quote! {
+        {
             let __apigate_result: #apigate::MapResult<_> = async { #(#original)* }.await;
             __apigate_result
-        }?;
-        match #kind_ident {
-            #apigate::__private::MapBodyKind::Json => {
-                #apigate::__private::serde_json::to_string(&__apigate_output).map_err(|__apigate_err| {
-                    #apigate::ApigateError::from(
-                        #apigate::ApigatePipelineError::FailedSerializeMappedJson(
-                            __apigate_err.to_string(),
-                        ),
-                    )
-                })
-            }
-            #apigate::__private::MapBodyKind::Form => {
-                #apigate::__private::serde_urlencoded::to_string(&__apigate_output)
-                    .map_err(|__apigate_err| {
-                        #apigate::ApigateError::from(
-                            #apigate::ApigatePipelineError::FailedSerializeMappedForm(
-                                __apigate_err.to_string(),
-                            ),
-                        )
-                    })
-            }
-        }
+        }?
+    }
+}
+
+/// Wrapper body for *every* map. Run the user body, then dispatch its output
+/// through the autoref marker [`Finisher`]
+fn finish_block(apigate: &TokenStream2, original: Vec<Stmt>) -> syn::Block {
+    let run = run_user_body(apigate, &original);
+    syn::parse_quote!({
+        let __apigate_output = #run;
+        let __apigate_payload = {
+            use #apigate::__private::Finish as _;
+            #apigate::__private::Finisher::<__apigate_format, _>::for_output(&__apigate_output)
+                .apigate_finish(__apigate_output)?
+        };
+        ::std::result::Result::Ok(#apigate::__private::BodyOutcome::from(__apigate_payload))
     })
+}
+
+/// Extracts a map's declared return type for the [`finish_predicate`] bound.
+fn map_return_type(output: &ReturnType) -> syn::Result<Type> {
+    match output {
+        ReturnType::Type(_, ty) => Ok((**ty).clone()),
+        ReturnType::Default => Err(syn::Error::new_spanned(
+            output,
+            "#[apigate::map] must return `apigate::MapResult<T>`",
+        )),
+    }
+}
+
+/// Rewrites every non-`'static` lifetime in a type to a fresh HRTB binder,
+/// collecting the binders. Turns a borrowing output `Out<'_>` into `Out<'__apigate_o0>`
+/// plus the binder list, which [`finish_predicate`] quantifies in the `Finish` bound.
+struct HrtbRewriter {
+    binders: Vec<Lifetime>,
+}
+
+impl HrtbRewriter {
+    fn fresh(&mut self) -> Lifetime {
+        let lt = Lifetime::new(
+            &format!("'__apigate_o{}", self.binders.len()),
+            Span::call_site(),
+        );
+        self.binders.push(lt.clone());
+        lt
+    }
+}
+
+impl VisitMut for HrtbRewriter {
+    fn visit_lifetime_mut(&mut self, lt: &mut Lifetime) {
+        if lt.ident != "static" {
+            *lt = self.fresh();
+        }
+    }
+
+    fn visit_type_reference_mut(&mut self, reference: &mut TypeReference) {
+        let replace = reference
+            .lifetime
+            .as_ref()
+            .is_none_or(|lt| lt.ident != "static");
+        if replace {
+            reference.lifetime = Some(self.fresh());
+        }
+        self.visit_type_mut(&mut reference.elem);
+    }
+}
+
+/// Builds the map wrapper's single autoref `Finish` predicate over the declared
+/// return type `RET`:
+/// `for<'__apigate_m[, ..]> &'m Finisher<F, <RET as MapOutput>::Output>: Finish<F, <RET as MapOutput>::Output>`.
+fn finish_predicate(apigate: &TokenStream2, return_ty: &Type) -> WherePredicate {
+    let mut ty = return_ty.clone();
+    let mut rewriter = HrtbRewriter {
+        binders: Vec::new(),
+    };
+    rewriter.visit_type_mut(&mut ty);
+
+    let marker = Lifetime::new("'__apigate_m", Span::call_site());
+    let mut binders = rewriter.binders;
+    binders.push(marker.clone());
+
+    // The map output `T`, projected out of the declared `MapResult<T>`; named
+    // once so both sides of the bound stay in lockstep.
+    let output = quote!(<#ty as #apigate::__private::MapOutput>::Output);
+    syn::parse_quote!(
+        for<#(#binders),*> &#marker #apigate::__private::Finisher<__apigate_format, #output>:
+            #apigate::__private::Finish<__apigate_format, #output>
+    )
+}
+
+/// Applies the map output protocol to the wrapper `f`: makes it generic over the
+/// format `__apigate_format`.
+fn apply_map_output(
+    f: &mut ItemFn,
+    apigate: &TokenStream2,
+    original: Vec<Stmt>,
+) -> syn::Result<Vec<Stmt>> {
+    let return_ty = map_return_type(&f.sig.output)?;
+
+    // Generic over the format `F` the route supplies via turbofish; its `Out`
+    // associated type decides the wire payload.
+    f.sig
+        .generics
+        .params
+        .push(syn::parse_quote!(__apigate_format));
+    f.sig.output = syn::parse_quote!(
+        -> #apigate::MapResult<
+            #apigate::__private::BodyOutcome<<__apigate_format as #apigate::__private::MapFormat>::Out>
+        >
+    );
+    {
+        let where_clause = f.sig.generics.make_where_clause();
+        where_clause
+            .predicates
+            .push(syn::parse_quote!(__apigate_format: #apigate::__private::MapFormat));
+        where_clause
+            .predicates
+            .push(finish_predicate(apigate, &return_ty));
+    }
+
+    Ok(finish_block(apigate, original).stmts)
 }
 
 // ---------------------------------------------------------------------------
@@ -493,11 +581,6 @@ pub(crate) fn expand_fn_params(
 
     validate_plans(&plans, &f.sig, macro_name)?;
 
-    // A map with a typed (non-`RawBody`) input serializes its output *inside* the wrapper.
-    let serde_mode =
-        matches!(mode, ExpansionMode::Map) && kept_param.as_ref().is_some_and(|k| !k.is_raw);
-    let kind_ident = format_ident!("__apigate_kind");
-
     // Only the bindings reference the generated `ctx`/`scope` params; name them
     // `_` when nothing uses them so generated wrappers stay warning-free.
     let ctx_used = plans.iter().any(|p| p.source.binds_ctx());
@@ -513,10 +596,10 @@ pub(crate) fn expand_fn_params(
         syn::parse_quote!(_)
     };
 
-    // Rewrite parameter list: [input,] ctx, scope[, kind]
+    // Rewrite parameter list: [input,] ctx, scope[, finisher]
     f.sig.inputs.clear();
     if let Some(kept) = kept_param {
-        f.sig.inputs.push(kept.param);
+        f.sig.inputs.push(kept);
     }
     f.sig
         .inputs
@@ -526,21 +609,14 @@ pub(crate) fn expand_fn_params(
         .push(syn::parse_quote!(#scope_pat: &mut #apigate::RequestScope<'_>));
 
     let bindings = build_bindings(&plans, &apigate, &ctx_ident, &scope_ident)?;
-
-    if serde_mode {
-        f.sig
-            .inputs
-            .push(syn::parse_quote!(#kind_ident: #apigate::__private::MapBodyKind));
-        f.sig.output = syn::parse_quote!(-> #apigate::MapResult<::std::string::String>);
-    }
-
-    // Prepend the parameter bindings to the user body
     let original = std::mem::take(&mut f.block.stmts);
-    let body_stmts = if serde_mode {
-        serde_map_block(&apigate, &kind_ident, original).stmts
+
+    let body_stmts = if matches!(mode, ExpansionMode::Map) {
+        apply_map_output(&mut f, &apigate, original)?
     } else {
         original
     };
+
     f.block.stmts = bindings;
     f.block.stmts.extend(body_stmts);
 

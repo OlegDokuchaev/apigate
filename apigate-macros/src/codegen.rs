@@ -126,18 +126,47 @@ fn take_body_expr(apigate_path: &TokenStream2) -> TokenStream2 {
     }
 }
 
+/// Shared tail for *every* mapped phase
+fn map_replace_or_keep(
+    apigate_path: &TokenStream2,
+    map_fn: &Path,
+    format: &TokenStream2,
+    input_expr: &TokenStream2,
+    content_type: Option<&str>,
+) -> TokenStream2 {
+    let set_content_type = match content_type {
+        Some(content_type) => quote! {
+            ctx.headers_mut().insert(
+                #apigate_path::__private::http::header::CONTENT_TYPE,
+                #apigate_path::__private::http::HeaderValue::from_static(#content_type),
+            );
+        },
+        None => quote!(),
+    };
+    quote! {
+        match #map_fn::<#format>(#input_expr, &mut ctx, &mut scope).await? {
+            #apigate_path::__private::BodyOutcome::Replace(new_body) => {
+                #set_content_type
+                ctx.headers_mut().remove(#apigate_path::__private::http::header::CONTENT_LENGTH);
+                Ok(#apigate_path::__private::axum::body::Body::from(new_body))
+            }
+            #apigate_path::__private::BodyOutcome::Keep => Ok(#apigate_path::__private::axum::body::Body::from(bytes)),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Raw body map phase (no `json`/`form` data)
 // ---------------------------------------------------------------------------
 
 fn none_map_phase(apigate_path: &TokenStream2, map_fn: &Path) -> TokenStream2 {
+    let format = quote!(#apigate_path::__private::Raw);
+    let apply = map_replace_or_keep(apigate_path, map_fn, &format, &quote!(raw), None);
     quote! {
-        scope.read_body_bytes().await?;
+        let bytes = scope.read_body_bytes().await?;
         let raw = scope.raw_body_cloned().ok_or_else(|| #apigate_path::ApigateError::from(
             #apigate_path::ApigatePipelineError::MissingFromScope("RawBody")))?;
-        let output = #map_fn(raw, &mut ctx, &mut scope).await?;
-        ctx.headers_mut().remove(#apigate_path::__private::http::header::CONTENT_LENGTH);
-        Ok(#apigate_path::__private::axum::body::Body::from(output))
+        #apply
     }
 }
 
@@ -147,18 +176,22 @@ fn none_map_phase(apigate_path: &TokenStream2, map_fn: &Path) -> TokenStream2 {
 
 fn json_phase(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) -> TokenStream2 {
     match map_fn {
-        Some(map_fn) => quote! {
-            let bytes = scope.read_body_bytes().await?;
-            let input: #ty = #apigate_path::__private::serde_json::from_slice(&bytes)
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidJsonBody(err.to_string())))?;
-            let new_body = #map_fn(input, &mut ctx, &mut scope, #apigate_path::__private::MapBodyKind::Json).await?;
-            ctx.headers_mut().insert(
-                #apigate_path::__private::http::header::CONTENT_TYPE,
-                #apigate_path::__private::http::HeaderValue::from_static("application/json"),
+        Some(map_fn) => {
+            let format = quote!(#apigate_path::__private::Json);
+            let apply = map_replace_or_keep(
+                apigate_path,
+                map_fn,
+                &format,
+                &quote!(input),
+                Some("application/json"),
             );
-            ctx.headers_mut().remove(#apigate_path::__private::http::header::CONTENT_LENGTH);
-            Ok(#apigate_path::__private::axum::body::Body::from(new_body))
-        },
+            quote! {
+                let bytes = scope.read_body_bytes().await?;
+                let input: #ty = #apigate_path::__private::serde_json::from_slice(&bytes)
+                    .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidJsonBody(err.to_string())))?;
+                #apply
+            }
+        }
         None => quote! {
             let bytes = scope.read_body_bytes().await?;
             let _: #ty = #apigate_path::__private::serde_json::from_slice(&bytes)
@@ -203,8 +236,11 @@ fn form_get_branch(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>
             let raw = ctx.uri().query().unwrap_or_default();
             let input: #ty = #apigate_path::__private::serde_urlencoded::from_str(raw)
                 .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidFormQuery(err.to_string())))?;
-            let encoded = #map_fn(input, &mut ctx, &mut scope, #apigate_path::__private::MapBodyKind::Form).await?;
-            ctx.set_encoded_query(&encoded)?;
+            if let #apigate_path::__private::BodyOutcome::Replace(encoded) =
+                #map_fn::<#apigate_path::__private::Form>(input, &mut ctx, &mut scope).await?
+            {
+                ctx.set_encoded_query(&encoded)?;
+            }
             #take
         },
         None => quote! {
@@ -218,18 +254,22 @@ fn form_get_branch(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>
 
 fn form_post_branch(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) -> TokenStream2 {
     match map_fn {
-        Some(map_fn) => quote! {
-            let bytes = scope.read_body_bytes().await?;
-            let input: #ty = #apigate_path::__private::serde_urlencoded::from_bytes(&bytes)
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidFormBody(err.to_string())))?;
-            let new_body = #map_fn(input, &mut ctx, &mut scope, #apigate_path::__private::MapBodyKind::Form).await?;
-            ctx.headers_mut().insert(
-                #apigate_path::__private::http::header::CONTENT_TYPE,
-                #apigate_path::__private::http::HeaderValue::from_static("application/x-www-form-urlencoded"),
+        Some(map_fn) => {
+            let format = quote!(#apigate_path::__private::Form);
+            let apply = map_replace_or_keep(
+                apigate_path,
+                map_fn,
+                &format,
+                &quote!(input),
+                Some("application/x-www-form-urlencoded"),
             );
-            ctx.headers_mut().remove(#apigate_path::__private::http::header::CONTENT_LENGTH);
-            Ok(#apigate_path::__private::axum::body::Body::from(new_body))
-        },
+            quote! {
+                let bytes = scope.read_body_bytes().await?;
+                let input: #ty = #apigate_path::__private::serde_urlencoded::from_bytes(&bytes)
+                    .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidFormBody(err.to_string())))?;
+                #apply
+            }
+        }
         None => quote! {
             let bytes = scope.read_body_bytes().await?;
             let _: #ty = #apigate_path::__private::serde_urlencoded::from_bytes(&bytes)
