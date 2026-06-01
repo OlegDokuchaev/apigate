@@ -1,6 +1,6 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{Ident, Item, ItemFn, Path, Result, Type};
+use syn::{Item, ItemFn, Path, Result, Type};
 
 use crate::route::DataKind;
 
@@ -42,7 +42,7 @@ pub(crate) fn generate_pipeline_wrapper(
     } else {
         quote!()
     };
-    let body_phase = build_body_phase(apigate_path, data, map_fn, &f.sig.ident, body_in_query)?;
+    let body_phase = build_body_phase(apigate_path, data, map_fn, body_in_query);
 
     let item: Item = syn::parse_quote! {
         #[doc(hidden)]
@@ -99,18 +99,14 @@ fn build_body_phase(
     apigate_path: &TokenStream2,
     data: &DataKind,
     map_fn: Option<&Path>,
-    route_fn_ident: &Ident,
     body_in_query: bool,
-) -> Result<TokenStream2> {
+) -> TokenStream2 {
     match (map_fn, data) {
-        (None, DataKind::None | DataKind::Multipart) => Ok(take_body_expr(apigate_path)),
-        (Some(_), DataKind::Multipart) => Err(syn::Error::new_spanned(
-            route_fn_ident,
-            "`map` is not supported with `multipart`",
-        )),
-        (Some(map_fn), DataKind::None) => Ok(none_map_phase(apigate_path, map_fn)),
-        (map_fn, DataKind::Json(ty)) => Ok(json_phase(apigate_path, ty, map_fn)),
-        (map_fn, DataKind::Form(ty)) => Ok(form_phase(apigate_path, ty, map_fn, body_in_query)),
+        (None, DataKind::None | DataKind::Multipart) => take_body_expr(apigate_path),
+        (Some(map_fn), DataKind::None) => none_map_phase(apigate_path, map_fn, false),
+        (Some(map_fn), DataKind::Multipart) => none_map_phase(apigate_path, map_fn, true),
+        (map_fn, DataKind::Json(ty)) => json_phase(apigate_path, ty, map_fn),
+        (map_fn, DataKind::Form(ty)) => form_phase(apigate_path, ty, map_fn, body_in_query),
     }
 }
 
@@ -159,14 +155,52 @@ fn map_replace_or_keep(
 // Raw body map phase (no `json`/`form` data)
 // ---------------------------------------------------------------------------
 
-fn none_map_phase(apigate_path: &TokenStream2, map_fn: &Path) -> TokenStream2 {
+fn none_map_phase(
+    apigate_path: &TokenStream2,
+    map_fn: &Path,
+    expect_multipart: bool,
+) -> TokenStream2 {
     let format = quote!(#apigate_path::__private::Raw);
     let apply = map_replace_or_keep(apigate_path, map_fn, &format, &quote!(raw), None);
+    let guard = if expect_multipart {
+        content_type_guard(
+            apigate_path,
+            "multipart/form-data",
+            Some("boundary="),
+            quote!(#apigate_path::ApigatePipelineError::ExpectedMultipartFormData),
+        )
+    } else {
+        quote!()
+    };
     quote! {
+        #guard
         let bytes = scope.read_body_bytes().await?;
         let raw = scope.raw_body_cloned().ok_or_else(|| #apigate_path::ApigateError::from(
             #apigate_path::ApigatePipelineError::MissingFromScope("RawBody")))?;
         #apply
+    }
+}
+
+/// Emits a `Content-Type` precondition: bails with `error`
+fn content_type_guard(
+    apigate_path: &TokenStream2,
+    prefix: &str,
+    needle: Option<&str>,
+    error: TokenStream2,
+) -> TokenStream2 {
+    let extra = match needle {
+        Some(needle) => quote!(|| !content_type.contains(#needle)),
+        None => quote!(),
+    };
+    quote! {
+        let content_type = ctx
+            .headers()
+            .get(#apigate_path::__private::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        if !content_type.starts_with(#prefix) #extra {
+            return Err(#apigate_path::ApigateError::from(#error));
+        }
     }
 }
 
@@ -214,16 +248,15 @@ fn form_phase(
     if body_in_query {
         form_get_branch(apigate_path, ty, map_fn)
     } else {
+        let guard = content_type_guard(
+            apigate_path,
+            "application/x-www-form-urlencoded",
+            None,
+            quote!(#apigate_path::ApigatePipelineError::ExpectedFormUrlEncoded),
+        );
         let post_branch = form_post_branch(apigate_path, ty, map_fn);
         quote! {
-            let content_type = ctx
-                .headers()
-                .get(#apigate_path::__private::http::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or_default();
-            if !content_type.starts_with("application/x-www-form-urlencoded") {
-                return Err(#apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::ExpectedFormUrlEncoded));
-            }
+            #guard
             #post_branch
         }
     }

@@ -113,20 +113,6 @@ pub(crate) struct RouteArgs {
     pub path_type: Option<Type>,
 }
 
-impl RouteArgs {
-    /// Checks cross-field invariants.
-    fn validate(&self) -> Result<()> {
-        if self.map.is_some() && matches!(self.data, DataKind::Multipart) {
-            return Err(Error::new(
-                Span::call_site(),
-                "`map` is not supported together with `multipart`",
-            ));
-        }
-
-        Ok(())
-    }
-}
-
 // ---------------------------------------------------------------------------
 // RouteArgsBuilder
 // ---------------------------------------------------------------------------
@@ -174,8 +160,8 @@ impl RouteArgsBuilder {
         Ok(())
     }
 
-    fn build(self, path: LitStr) -> Result<RouteArgs> {
-        let args = RouteArgs {
+    fn build(self, path: LitStr) -> RouteArgs {
+        RouteArgs {
             path,
             to: self.to,
             policy: self.policy,
@@ -184,10 +170,7 @@ impl RouteArgsBuilder {
             query_type: self.query_type,
             data: self.data,
             path_type: self.path_type,
-        };
-
-        args.validate()?;
-        Ok(args)
+        }
     }
 }
 
@@ -261,7 +244,7 @@ impl Parse for RouteArgs {
             builder.apply(input.parse()?)?;
         }
 
-        builder.build(path)
+        Ok(builder.build(path))
     }
 }
 
@@ -434,17 +417,20 @@ mod tests {
         assert!(syn::parse_str::<RouteArgs>(r#""/items", to = "/a", to = "/b""#).is_err());
         assert!(syn::parse_str::<RouteArgs>(r#""/items", query = A, query = B"#).is_err());
         assert!(syn::parse_str::<RouteArgs>(r#""/items", json = A, form = B"#).is_err());
+        // `multipart` is a body mode, so it is mutually exclusive with `json`/`form`.
+        assert!(syn::parse_str::<RouteArgs>(r#""/items", multipart, json = A"#).is_err());
+        assert!(syn::parse_str::<RouteArgs>(r#""/items", form = A, multipart"#).is_err());
         assert!(syn::parse_str::<RouteArgs>(r#""/items", unknown = A"#).is_err());
     }
 
     #[test]
-    fn allows_map_without_body_data_but_rejects_multipart() {
+    fn allows_map_with_no_body_data_or_multipart() {
         // `map` without `json`/`form` is allowed: the map takes a `RawBody` input.
         assert!(syn::parse_str::<RouteArgs>(r#""/items", map = remap"#).is_ok());
         assert!(
             syn::parse_str::<RouteArgs>(r#""/items", query = QueryInput, map = remap"#).is_ok()
         );
-        // `map` with `multipart` is still rejected.
-        assert!(syn::parse_str::<RouteArgs>(r#""/items", multipart, map = remap"#).is_err());
+        // `map` now pairs with `multipart`: the unparsed bytes are handed to the map raw.
+        assert!(syn::parse_str::<RouteArgs>(r#""/items", multipart, map = remap"#).is_ok());
     }
 }
