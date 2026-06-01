@@ -44,9 +44,6 @@ ApiGate is benchmarked against Kong, Apache APISIX, and a tuned Python ASGI
 gateway in a reproducible load-test repo:
 [OlegDokuchaev/apigate-benchmark](https://github.com/OlegDokuchaev/apigate-benchmark).
 
-The latest run uses the same Go auth/data backends for every gateway and runs
-one gateway at a time on a 4 vCPU / 10 GiB Linux host.
-
 | Profile | Result |
 |---|---|
 | Steady, 2500 RPS | ApiGate p99 latency is 33-144% faster than APISIX, 52-391% faster than Kong, and 317-3857% faster than Python depending on route. |

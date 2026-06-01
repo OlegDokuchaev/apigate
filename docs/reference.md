@@ -247,7 +247,7 @@ async fn protected() {}
 
 ## Maps
 
-Maps transform typed `json` or `form` inputs before proxying. Query rewrites belong in hooks through `PartsCtx::set_query`.
+Maps transform the request body before proxying: a typed `json`/`form` input, or the raw bytes (`RawBody`) for `multipart` or no body data. Query rewrites belong in hooks through `PartsCtx::set_query`.
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -287,7 +287,7 @@ Mapping behavior:
 |---|---|
 | `json = T` | Serialized with `serde_json` and sent as a new JSON body. |
 | `form = T` | Serialized with `serde_urlencoded`; sent as a form body for non-GET/HEAD and as query string for GET/HEAD. |
-| no body data | The map takes `RawBody`; its output (`RawBody`/`Bytes`/`Vec<u8>`/`String`, or `()` to keep) is sent as the new body. |
+| `multipart` or no body data | The map takes `RawBody`; its output (`RawBody`/`Bytes`/`Vec<u8>`/`String`, or `()` to keep) is sent as the new body. |
 | any of the above, returning `()` | Validate-only: the original request body is forwarded unchanged (see below). |
 
 ### Borrowing map output
@@ -439,8 +439,8 @@ routes (which read the query string instead); requesting it there fails with a
 | `&T` | Local per-request value first, then shared app state. | `config: &AuthConfig` |
 | `&mut T` | Local per-request value only. | `counter: &mut RequestCounter` |
 | `T` in a hook | `scope.take::<T>()`; falls back to cloning shared state. | `path: SalePath` |
-| First owned `T` in a map | Typed input from `json` or `form`. | `input: PublicBuy` |
-| `RawBody` in a map | Owned clone of the raw request bytes. It is the map input when the route has no `json`/`form`. | `raw: apigate::RawBody` |
+| First owned `T` in a map | Typed input from `json` or `form` (or `RawBody` for `multipart`/no body data). | `input: PublicBuy` |
+| `RawBody` in a map | Owned clone of the raw request bytes. It is the map input when the route has `multipart` or no `json`/`form`. | `raw: apigate::RawBody` |
 | Additional owned `T` in a map | `scope.take::<T>()`; falls back to cloning shared state. | `path: SalePath` |
 
 Rules enforced by the macros:
