@@ -84,9 +84,9 @@ Route arguments:
 | `query = T` | Deserializes typed query parameters and stores them in `RequestScope`. `T` should be `Deserialize + Clone + Send + Sync + 'static`. |
 | `json = T` | Validates JSON body as `T`. With `map`, serializes mapped output as a new JSON body. |
 | `form = T` | Validates `application/x-www-form-urlencoded` data as `T`. With `map`, serializes mapped output back as form data or query data for GET/HEAD. |
-| `multipart` | Enables multipart passthrough. The body is not read or buffered. |
+| `multipart` | Enables multipart passthrough. Without a `map` the body is not read or buffered; attaching a `map` reads it and hands it over as `RawBody`. |
 | `before = [...]` | Hooks executed before proxying. They run in the listed order. |
-| `map = fn_name` | Request transformation. Works with `json`, `form`, or no body data (the map then takes a `RawBody` input). Return a value to replace the body, or `()` to validate only and forward the body unchanged. Not supported with `multipart` routes. |
+| `map = fn_name` | Request transformation. Works with `json`, `form`, `multipart`, or no body data (with `multipart` or no body data the map takes a `RawBody` input). Return a value to replace the body, or `()` to validate only and forward the body unchanged. |
 | `policy = "name"` | Route-level policy override. |
 
 `query = T` is independent from body handling and can be combined with `json`, `form`, or `multipart`. Only one body mode can be used per route: `json`, `form`, or `multipart`.
@@ -204,7 +204,9 @@ With `map`, ApiGate validates the input, calls your mapper, and forwards the map
 async fn upload() {}
 ```
 
-Multipart bodies are proxied as streaming passthrough. ApiGate does not read or buffer the file body. `map` is intentionally not supported for multipart routes.
+Without a `map`, multipart bodies are proxied as streaming passthrough — ApiGate does not read or buffer the file body. Attaching a `map` opts into buffering: the unparsed bytes are read and handed to the map as `RawBody` (a typed `json`/`form` map cannot pair with `multipart`). Return a new body to rewrite the upload, or `()` to inspect and forward it unchanged.
+
+When a `map` is attached, the request `Content-Type` is checked first: it must start with `multipart/form-data` and carry a `boundary` parameter, otherwise the request is rejected with `415 Unsupported Media Type` before the map runs. Passthrough multipart routes (no `map`) do not check the header.
 
 ## Hooks
 
