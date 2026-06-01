@@ -8,6 +8,7 @@ fn macro_param_expansion() {
     t.pass("tests/ui/pass/map_raw_output.rs");
     t.pass("tests/ui/pass/map_borrowed_output.rs");
     t.pass("tests/ui/pass/map_validate_only.rs");
+    t.pass("tests/ui/pass/map_multipart_raw.rs");
     t.compile_fail("tests/ui/fail/hook_not_async.rs");
     t.compile_fail("tests/ui/fail/ctx_not_mut.rs");
     t.compile_fail("tests/ui/fail/scope_with_ref_param.rs");

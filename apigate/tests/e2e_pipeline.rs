@@ -116,6 +116,13 @@ async fn inspect_raw(raw: apigate::RawBody) -> apigate::MapResult<()> {
     Ok(())
 }
 
+// Multipart map: buffers the upload and forwards it unchanged.
+#[apigate::map]
+async fn inspect_multipart(raw: apigate::RawBody) -> apigate::MapResult<()> {
+    let _ = raw.len();
+    Ok(())
+}
+
 #[apigate::service(name = "sales", prefix = "/sales")]
 mod sales {
     use super::*;
@@ -131,6 +138,9 @@ mod sales {
 
     #[apigate::post("/inspect", map = inspect_raw)]
     async fn inspect() {}
+
+    #[apigate::post("/upload", multipart, map = inspect_multipart)]
+    async fn upload() {}
 }
 
 async fn app(base_url: String) -> Router {
@@ -285,6 +295,76 @@ async fn raw_validate_only_map_rejects_empty_body() {
 
     let (status, _, _) = support::response_text(response).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn multipart_map_forwards_body_when_content_type_matches() {
+    let upstream = support::spawn_upstream(Router::new().fallback(echo)).await;
+    let router = app(upstream.url()).await;
+
+    let original = "--xyz\r\nContent-Disposition: form-data; name=\"f\"\r\n\r\nv\r\n--xyz--\r\n";
+    let response = support::send_request(
+        router,
+        Request::builder()
+            .method(Method::POST)
+            .uri("/sales/upload")
+            .header(
+                http::header::CONTENT_TYPE,
+                "multipart/form-data; boundary=xyz",
+            )
+            .body(Body::from(original))
+            .unwrap(),
+    )
+    .await;
+
+    let (status, _, body) = support::response_text(response).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let echo: EchoBody = serde_json::from_str(&body).unwrap();
+    assert_eq!(echo.uri, "/upload");
+    // validate-only multipart map forwards the upload byte-for-byte.
+    assert_eq!(echo.body, original);
+}
+
+#[tokio::test]
+async fn multipart_map_rejects_non_multipart_content_type() {
+    let upstream = support::spawn_upstream(Router::new().fallback(echo)).await;
+    let router = app(upstream.url()).await;
+
+    let response = support::send_request(
+        router,
+        Request::builder()
+            .method(Method::POST)
+            .uri("/sales/upload")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap(),
+    )
+    .await;
+
+    let (status, _, _) = support::response_text(response).await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}
+
+#[tokio::test]
+async fn multipart_map_rejects_missing_boundary() {
+    let upstream = support::spawn_upstream(Router::new().fallback(echo)).await;
+    let router = app(upstream.url()).await;
+
+    // Right type, but no `boundary=` — an unparseable multipart body.
+    let response = support::send_request(
+        router,
+        Request::builder()
+            .method(Method::POST)
+            .uri("/sales/upload")
+            .header(http::header::CONTENT_TYPE, "multipart/form-data")
+            .body(Body::from("data"))
+            .unwrap(),
+    )
+    .await;
+
+    let (status, _, _) = support::response_text(response).await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
 }
 
 #[tokio::test]
