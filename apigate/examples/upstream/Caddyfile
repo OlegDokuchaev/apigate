@@ -107,6 +107,45 @@ body={http.request.body}
 EOF 200
 	}
 
+	@events {
+		method POST
+		path /events
+	}
+	handle @events {
+		respond <<EOF
+kind=events
+content_type={header.Content-Type}
+x_signature={header.X-Signature}
+body={http.request.body}
+EOF 200
+	}
+
+	@signup {
+		method POST
+		path /signup
+	}
+	handle @signup {
+		respond <<EOF
+kind=signup
+content_type={header.Content-Type}
+x_validated={header.X-Validated}
+body={http.request.body}
+EOF 200
+	}
+
+	@raw {
+		method POST
+		path /raw
+	}
+	handle @raw {
+		respond <<EOF
+kind=raw
+content_type={header.Content-Type}
+x_raw_len={header.X-Raw-Len}
+body={http.request.body}
+EOF 200
+	}
+
 	# Path rewrite/template examples.
 	@reviews {
 		method GET
@@ -177,7 +216,7 @@ EOF 200
 
 	@reserved_get {
 		method GET
-		path /buy /legacy-create /upload /upload-public
+		path /buy /legacy-create /events /signup /raw /upload /upload-public
 	}
 	handle @reserved_get {
 		respond "not-found\n" 404
