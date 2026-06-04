@@ -12,10 +12,10 @@ mod sales {
     use super::*;
 
     #[apigate::get("/ping")]
-    async fn ping() {}
+    fn ping() {}
 
     #[apigate::post("/buy", json = BuyInput, before = [auth], map = remap_buy)]
-    async fn buy() {}
+    fn buy() {}
 }
 ```
 
@@ -71,7 +71,7 @@ Full route shape:
     map = remap_body,
     policy = "sticky_by_id",
 )]
-async fn route_name() {}
+fn route_name() {}
 ```
 
 Route arguments:
@@ -99,7 +99,7 @@ No `to` means strip the service prefix:
 #[apigate::service(prefix = "/sales")]
 mod sales {
     #[apigate::get("/ping")]
-    async fn ping() {}
+    fn ping() {}
 }
 ```
 
@@ -109,14 +109,14 @@ Static rewrite:
 
 ```rust
 #[apigate::get("/public", to = "/internal")]
-async fn public_alias() {}
+fn public_alias() {}
 ```
 
 Template rewrite:
 
 ```rust
 #[apigate::get("/item/{id}/review", to = "/api/v2/reviews/{id}")]
-async fn item_review() {}
+fn item_review() {}
 ```
 
 ## Typed Inputs
@@ -137,7 +137,7 @@ mod sales {
     use super::*;
 
     #[apigate::get("/{id}", path = SalePath)]
-    async fn get_sale() {}
+    fn get_sale() {}
 }
 ```
 
@@ -152,7 +152,7 @@ struct SearchQuery {
 }
 
 #[apigate::get("/search", query = SearchQuery)]
-async fn search() {}
+fn search() {}
 ```
 
 Query values are extracted before hooks and inserted into `RequestScope`, like path values. Hooks and maps can request `&SearchQuery` or owned `SearchQuery` as parameters.
@@ -179,7 +179,7 @@ async fn rewrite_query(
 }
 
 #[apigate::get("/search", query = SearchQuery, before = [rewrite_query])]
-async fn rewritten_search() {}
+fn rewritten_search() {}
 ```
 
 ### JSON and Form
@@ -187,10 +187,10 @@ async fn rewritten_search() {}
 ```rust
 
 #[apigate::post("/buy", json = BuyInput)]
-async fn buy() {}
+fn buy() {}
 
 #[apigate::post("/legacy", form = LegacyForm)]
-async fn legacy() {}
+fn legacy() {}
 ```
 
 Without `map`, ApiGate validates the input and forwards the original body data. Validation requires reading the body up to `map_body_limit`.
@@ -201,7 +201,7 @@ With `map`, ApiGate validates the input, calls your mapper, and forwards the map
 
 ```rust
 #[apigate::post("/upload", multipart, before = [auth])]
-async fn upload() {}
+fn upload() {}
 ```
 
 Without a `map`, multipart bodies are proxied as streaming passthrough — ApiGate does not read or buffer the file body. Attaching a `map` opts into buffering: the unparsed bytes are read and handed to the map as `RawBody` (a typed `json`/`form` map cannot pair with `multipart`). Return a new body to rewrite the upload, or `()` to inspect and forward it unchanged.
@@ -226,7 +226,7 @@ async fn auth(ctx: &mut apigate::PartsCtx) -> apigate::HookResult {
 }
 
 #[apigate::get("/protected", before = [auth])]
-async fn protected() {}
+fn protected() {}
 ```
 
 `PartsCtx` exposes the request head:
@@ -278,7 +278,7 @@ async fn remap_buy(input: PublicBuy) -> apigate::MapResult<UpstreamBuy> {
 }
 
 #[apigate::post("/buy", json = PublicBuy, map = remap_buy)]
-async fn buy() {}
+fn buy() {}
 ```
 
 Mapping behavior:
@@ -331,7 +331,7 @@ async fn validate(input: CreateUser, ctx: &mut apigate::PartsCtx) -> apigate::Ma
 }
 
 #[apigate::post("/users", json = CreateUser, map = validate)]
-async fn create_user() {}
+fn create_user() {}
 ```
 
 The typed input is still parsed first, so malformed bodies are rejected before the
@@ -376,7 +376,7 @@ async fn verify_and_remap(
 }
 
 #[apigate::post("/events", json = WebhookEvent, map = verify_and_remap)]
-async fn events() {}
+fn events() {}
 ```
 
 `RawBody` is owned (a cheap reference-counted `Bytes` clone), so it composes
@@ -393,7 +393,7 @@ async fn forward_raw(raw: apigate::RawBody) -> apigate::MapResult<apigate::RawBo
 }
 
 #[apigate::post("/raw", map = forward_raw)]
-async fn raw() {}
+fn raw() {}
 ```
 
 To forward part of the body, return a zero-copy `Bytes` view (a reference-counted
@@ -485,7 +485,7 @@ mod sales {
     use super::*;
 
     #[apigate::get("/{id}", path = SalePath, before = [require_key, add_sale_header])]
-    async fn get_sale() {}
+    fn get_sale() {}
 }
 ```
 
@@ -834,7 +834,7 @@ Use a service-level policy:
 #[apigate::service(prefix = "/sales", policy = "sticky_user")]
 mod sales {
     #[apigate::get("/user")]
-    async fn user() {}
+    fn user() {}
 }
 ```
 
@@ -842,7 +842,7 @@ Override per route:
 
 ```rust
 #[apigate::get("/{id}", policy = "sticky_id")]
-async fn by_id() {}
+fn by_id() {}
 ```
 
 Policy priority:

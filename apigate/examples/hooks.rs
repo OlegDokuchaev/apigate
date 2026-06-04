@@ -116,11 +116,11 @@ mod sales {
 
     /// Shared state in a hook: `require_api_key` receives `&AppConfig`.
     #[apigate::get("/admin/stats", before = [require_api_key])]
-    async fn admin_stats() {}
+    fn admin_stats() {}
 
     /// Authorization hook: validates token and injects upstream headers.
     #[apigate::get("/user", before = [inject_user_headers])]
-    async fn user_profile() {}
+    fn user_profile() {}
 
     /// Four-hook chain with per-request data passed through scope:
     /// require_api_key -> inject_user_headers -> set_request_id -> log_request_meta.
@@ -128,11 +128,11 @@ mod sales {
         "/secure-user",
         before = [require_api_key, inject_user_headers, set_request_id, log_request_meta]
     )]
-    async fn secure_user_profile() {}
+    fn secure_user_profile() {}
 
     /// Typed query data in a hook: validates the public query, then rewrites it.
     #[apigate::get("/products", query = ProductsQuery, before = [remap_products_query])]
-    async fn get_products() {}
+    fn get_products() {}
 }
 
 // ---------------------------------------------------------------------------

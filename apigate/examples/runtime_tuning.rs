@@ -6,10 +6,10 @@ use std::time::Duration;
 #[apigate::service(prefix = "/sales")]
 mod sales {
     #[apigate::get("/ping")]
-    async fn ping() {}
+    fn ping() {}
 
     #[apigate::get("/anything")]
-    async fn anything() {}
+    fn anything() {}
 }
 
 #[tokio::main]

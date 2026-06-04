@@ -191,23 +191,23 @@ mod sales {
 
     /// JSON body transformed through a map function with shared state access.
     #[apigate::post("/buy", json = PublicBuyInput, before = [inject_user_headers], map = remap_buy_json)]
-    async fn buy() {}
+    fn buy() {}
 
     /// Form body transformed through a map function.
     #[apigate::post("/legacy-create", form = LegacyFormPublic, map = remap_legacy_form)]
-    async fn legacy_create() {}
+    fn legacy_create() {}
 
     /// Typed body + raw-byte signature verification.
     #[apigate::post("/events", json = WebhookEvent, map = verify_and_remap)]
-    async fn events() {}
+    fn events() {}
 
     /// Validate-only: parse and check the body, forward it unchanged.
     #[apigate::post("/signup", json = SignupInput, map = validate_signup)]
-    async fn signup() {}
+    fn signup() {}
 
     /// No schema: inspect and forward the exact body.
     #[apigate::post("/raw", map = forward_raw)]
-    async fn raw() {}
+    fn raw() {}
 }
 
 // ---------------------------------------------------------------------------

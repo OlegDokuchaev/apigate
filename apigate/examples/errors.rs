@@ -91,7 +91,7 @@ mod sales {
     use super::*;
 
     #[apigate::post("/buy", json = BuyInput, before = [require_auth], map = remap_buy)]
-    async fn buy() {}
+    fn buy() {}
 }
 
 #[tokio::main]

@@ -16,23 +16,23 @@ mod sales {
 
     /// HeaderSticky: requests with the same `x-user-id` use the same backend.
     #[apigate::get("/user", before = [inject_user_id])]
-    async fn user_profile() {}
+    fn user_profile() {}
 
     /// PathSticky: affinity key comes from path parameter `{id}`.
     #[apigate::get("/{id}", policy = "path_sticky")]
-    async fn by_id() {}
+    fn by_id() {}
 
     /// LeastRequest: chooses the backend with the fewest in-flight requests.
     #[apigate::get("/fast", policy = "least_req")]
-    async fn fast() {}
+    fn fast() {}
 
     /// LeastTime: chooses the backend with the lowest EWMA latency.
     #[apigate::get("/optimized", policy = "least_time")]
-    async fn optimized() {}
+    fn optimized() {}
 
     /// RoundRobin: cycles through backends.
     #[apigate::get("/ping", policy = "round_robin")]
-    async fn ping() {}
+    fn ping() {}
 }
 
 #[tokio::main]

@@ -89,13 +89,13 @@ use std::net::SocketAddr;
 #[apigate::service(prefix = "/sales")]
 mod sales {
     #[apigate::get("/ping")]
-    async fn ping() {}
+    fn ping() {}
 
     #[apigate::get("/public", to = "/internal")]
-    async fn public_alias() {}
+    fn public_alias() {}
 
     #[apigate::get("/item/{id}/review", to = "/api/v2/reviews/{id}")]
-    async fn item_review() {}
+    fn item_review() {}
 }
 
 #[tokio::main]

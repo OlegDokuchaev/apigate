@@ -97,8 +97,8 @@ fn rewrite_path_and_query(
         Rewrite::Template(tpl) => {
             let stripped = strip_prefix(uri.path(), meta.prefix);
 
-            let rendered = render_template(tpl, stripped, query)
-                .ok_or(ProxyErrorKind::InvalidUpstreamUri)?;
+            let rendered =
+                render_template(tpl, stripped, query).ok_or(ProxyErrorKind::InvalidUpstreamUri)?;
 
             PathAndQuery::try_from(rendered)
                 .map(Some)
