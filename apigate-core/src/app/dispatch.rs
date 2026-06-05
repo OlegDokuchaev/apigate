@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::Extension;
 use axum::body::Body;
 use axum::extract::{Request as AxumRequest, State};
 
@@ -17,7 +16,7 @@ use crate::{ApigateError, PartsCtx, RequestScope};
 
 pub(super) async fn proxy_handler(
     State(inner): State<Arc<Inner>>,
-    Extension(route_idx): Extension<usize>,
+    route_idx: usize,
     req: AxumRequest,
 ) -> axum::response::Response {
     let meta = &inner.route_metas[route_idx];

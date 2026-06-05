@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::Router;
 use axum::routing;
-use axum::{Extension, Router};
 
 use super::dispatch::proxy_handler;
 use super::{App, AppBuilder, Inner, UpstreamConfig};
@@ -256,7 +256,7 @@ fn mount_routes(
         let route_idx = route_metas.len();
         route_metas.push(meta);
 
-        let method_router = method_router(rd.method).layer(Extension(route_idx));
+        let method_router = method_router(rd.method, route_idx);
 
         router = router.route(&full_path, method_router);
     }
@@ -297,15 +297,17 @@ fn join(prefix: &str, path: &str) -> String {
     s
 }
 
-fn method_router(method: Method) -> routing::MethodRouter<Arc<Inner>> {
+fn method_router(method: Method, route_idx: usize) -> routing::MethodRouter<Arc<Inner>> {
+    let handler = move |state: _, req: _| proxy_handler(state, route_idx, req);
+
     match method {
-        Method::Get => routing::get(proxy_handler),
-        Method::Post => routing::post(proxy_handler),
-        Method::Put => routing::put(proxy_handler),
-        Method::Delete => routing::delete(proxy_handler),
-        Method::Patch => routing::patch(proxy_handler),
-        Method::Head => routing::head(proxy_handler),
-        Method::Options => routing::options(proxy_handler),
+        Method::Get => routing::get(handler),
+        Method::Post => routing::post(handler),
+        Method::Put => routing::put(handler),
+        Method::Delete => routing::delete(handler),
+        Method::Patch => routing::patch(handler),
+        Method::Head => routing::head(handler),
+        Method::Options => routing::options(handler),
     }
 }
 
