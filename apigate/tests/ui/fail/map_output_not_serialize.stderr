@@ -2,13 +2,8 @@ error[E0277]: the trait bound `NotSerialize: serde::Serialize` is not satisfied
   --> tests/ui/fail/map_output_not_serialize.rs:20:1
    |
 20 | #[apigate::service(name = "svc", prefix = "/svc")]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Serialize` is not implemented for `NotSerialize`
    |
-help: the trait `Serialize` is not implemented for `NotSerialize`
-  --> tests/ui/fail/map_output_not_serialize.rs:11:1
-   |
-11 | struct NotSerialize {
-   | ^^^^^^^^^^^^^^^^^^^
    = note: for local types consider adding `#[derive(serde::Serialize)]` to your `NotSerialize` type
    = note: for types from other crates check whether the crate offers a `serde` feature flag
    = help: the following other types implement trait `Serialize`:
