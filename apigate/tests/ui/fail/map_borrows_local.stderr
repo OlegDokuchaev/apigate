@@ -1,0 +1,8 @@
+error[E0515]: cannot return value referencing local variable `computed`
+  --> tests/ui/fail/map_borrows_local.rs:20:5
+   |
+20 |     Ok(Output { name: &computed })
+   |     ^^^^^^^^^^^^^^^^^^---------^^^
+   |     |                 |
+   |     |                 `computed` is borrowed here
+   |     returns a value referencing data owned by the current function

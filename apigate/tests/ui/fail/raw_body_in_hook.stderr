@@ -1,0 +1,5 @@
+error: `RawBody` is only available in #[apigate::map]
+ --> tests/ui/fail/raw_body_in_hook.rs:2:14
+  |
+2 | async fn bad(raw: apigate::RawBody) -> apigate::HookResult {
+  |              ^^^^^^^^^^^^^^^^^^^^^

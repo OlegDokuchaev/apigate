@@ -31,6 +31,9 @@ pub enum ApigatePipelineError {
     /// Expected `application/x-www-form-urlencoded` body.
     #[error("expected application/x-www-form-urlencoded")]
     ExpectedFormUrlEncoded,
+    /// Expected a `multipart/form-data` body.
+    #[error("expected multipart/form-data")]
+    ExpectedMultipartFormData,
     /// Form values from the query string could not be deserialized.
     #[error("invalid form query")]
     InvalidFormQuery(String),
@@ -55,6 +58,7 @@ impl ApigatePipelineError {
             Self::FailedSerializeMappedQuery(_) => "failed to serialize mapped query",
             Self::FailedRebuildUri(_) => "failed to rebuild uri",
             Self::ExpectedFormUrlEncoded => "expected application/x-www-form-urlencoded",
+            Self::ExpectedMultipartFormData => "expected multipart/form-data",
             Self::InvalidFormQuery(_) => "invalid form query",
             Self::FailedSerializeMappedForm(_) => "failed to serialize mapped form",
             Self::InvalidFormBody(_) => "invalid form body",
@@ -74,7 +78,9 @@ impl ApigatePipelineError {
             | Self::InvalidFormQuery(detail)
             | Self::FailedSerializeMappedForm(detail)
             | Self::InvalidFormBody(detail) => Some(detail.as_str()),
-            Self::RequestBodyAlreadyConsumed | Self::ExpectedFormUrlEncoded => None,
+            Self::RequestBodyAlreadyConsumed
+            | Self::ExpectedFormUrlEncoded
+            | Self::ExpectedMultipartFormData => None,
         }
     }
 
@@ -88,7 +94,9 @@ impl ApigatePipelineError {
             | Self::FailedRebuildUri(_)
             | Self::FailedSerializeMappedForm(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::RequestBodyTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
-            Self::ExpectedFormUrlEncoded => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Self::ExpectedFormUrlEncoded | Self::ExpectedMultipartFormData => {
+                StatusCode::UNSUPPORTED_MEDIA_TYPE
+            }
             Self::InvalidJsonBody(_)
             | Self::InvalidQuery(_)
             | Self::InvalidFormQuery(_)
@@ -108,6 +116,7 @@ impl ApigatePipelineError {
             Self::FailedSerializeMappedQuery(_) => "serialize_mapped_query_failed",
             Self::FailedRebuildUri(_) => "rebuild_uri_failed",
             Self::ExpectedFormUrlEncoded => "expected_form_urlencoded",
+            Self::ExpectedMultipartFormData => "expected_multipart_form_data",
             Self::InvalidFormQuery(_) => "invalid_form_query",
             Self::FailedSerializeMappedForm(_) => "serialize_mapped_form_failed",
             Self::InvalidFormBody(_) => "invalid_form_body",
@@ -184,6 +193,13 @@ mod tests {
                 None,
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
                 "expected_form_urlencoded",
+            ),
+            (
+                ApigatePipelineError::ExpectedMultipartFormData,
+                "expected multipart/form-data",
+                None,
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "expected_multipart_form_data",
             ),
             (
                 ApigatePipelineError::InvalidFormQuery("bad form query".to_string()),

@@ -16,6 +16,7 @@ apigate-core = { path = "../apigate-core", version = "1.0.0" }
 apigate-macros = { path = "../apigate-macros", version = "1.0.0" }
 axum = "0.8.8"
 http = "1.4.0"
+serde = "1"
 serde_json = "1.0.149"
 serde_urlencoded = "0.7.1"
 

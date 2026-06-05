@@ -7,19 +7,19 @@ use std::net::SocketAddr;
 mod sales {
     /// Passthrough: forwards `/ping` as-is after stripping the service prefix.
     #[apigate::get("/ping")]
-    async fn ping() {}
+    fn ping() {}
 
     /// Static rewrite: `/public` -> `/internal`.
     #[apigate::get("/public", to = "/internal")]
-    async fn public_alias() {}
+    fn public_alias() {}
 
     /// Rewrite template: `/item/{id}/review` -> `/api/v2/reviews/{id}`.
     #[apigate::get("/item/{id}/review", to = "/api/v2/reviews/{id}")]
-    async fn item_review() {}
+    fn item_review() {}
 
     /// Plain fallback-style route used by the example curl output.
     #[apigate::get("/anything")]
-    async fn anything() {}
+    fn anything() {}
 }
 
 #[tokio::main]

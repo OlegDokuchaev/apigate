@@ -1,8 +1,12 @@
 use proc_macro::TokenStream;
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::spanned::Spanned;
-use syn::{FnArg, ItemFn, Pat, Path, PathArguments, Stmt, Type, TypePath, TypeReference};
+use syn::visit_mut::VisitMut;
+use syn::{
+    FnArg, ItemFn, Lifetime, Pat, Path, PathArguments, ReturnType, Stmt, Type, TypePath,
+    TypeReference, WherePredicate,
+};
 
 use crate::apigate_crate_path;
 
@@ -17,6 +21,26 @@ enum ParamSource {
     ScopeRef(Type),
     ScopeMut(Type),
     ScopeTake,
+    RawBody,
+}
+
+impl ParamSource {
+    /// Whether binding this parameter reads the generated `ctx` argument.
+    fn binds_ctx(&self) -> bool {
+        matches!(self, Self::PartsCtx)
+    }
+
+    /// Whether binding this parameter reads the generated `scope` argument.
+    fn binds_scope(&self) -> bool {
+        matches!(
+            self,
+            Self::RequestScope
+                | Self::ScopeRef(_)
+                | Self::ScopeMut(_)
+                | Self::ScopeTake
+                | Self::RawBody
+        )
+    }
 }
 
 #[derive(Clone)]
@@ -30,6 +54,14 @@ struct ParamPlan {
 struct SpecialTypePaths {
     ctx: Path,
     scope: Path,
+    raw_body: Path,
+}
+
+#[derive(Clone, Copy)]
+enum SpecialKind {
+    PartsCtx,
+    RequestScope,
+    RawBody,
 }
 
 impl SpecialTypePaths {
@@ -37,7 +69,20 @@ impl SpecialTypePaths {
         Ok(Self {
             ctx: syn::parse2(quote!(#apigate::PartsCtx))?,
             scope: syn::parse2(quote!(#apigate::RequestScope))?,
+            raw_body: syn::parse2(quote!(#apigate::RawBody))?,
         })
+    }
+
+    fn match_kind(&self, ty: &Type) -> Option<SpecialKind> {
+        if is_special_type(ty, &self.ctx) {
+            Some(SpecialKind::PartsCtx)
+        } else if is_special_type(ty, &self.scope) {
+            Some(SpecialKind::RequestScope)
+        } else if is_special_type(ty, &self.raw_body) {
+            Some(SpecialKind::RawBody)
+        } else {
+            None
+        }
     }
 }
 
@@ -67,23 +112,18 @@ fn classify_param(ty: &Type, special: &SpecialTypePaths) -> syn::Result<ParamSou
 
     match ty {
         Type::Reference(r) => classify_ref_param(ty, r, special),
-        other => {
-            if is_special_type(other, &special.ctx) {
-                return Err(syn::Error::new(
-                    other.span(),
-                    "`PartsCtx` parameter must be `&mut PartsCtx`",
-                ));
-            }
-
-            if is_special_type(other, &special.scope) {
-                return Err(syn::Error::new(
-                    other.span(),
-                    "`RequestScope` parameter must be `&mut RequestScope`",
-                ));
-            }
-
-            Ok(ParamSource::ScopeTake)
-        }
+        other => match special.match_kind(other) {
+            Some(SpecialKind::PartsCtx) => Err(syn::Error::new(
+                other.span(),
+                "`PartsCtx` parameter must be `&mut PartsCtx`",
+            )),
+            Some(SpecialKind::RequestScope) => Err(syn::Error::new(
+                other.span(),
+                "`RequestScope` parameter must be `&mut RequestScope`",
+            )),
+            Some(SpecialKind::RawBody) => Ok(ParamSource::RawBody),
+            None => Ok(ParamSource::ScopeTake),
+        },
     }
 }
 
@@ -94,32 +134,38 @@ fn classify_ref_param(
 ) -> syn::Result<ParamSource> {
     let inner = peel_type(&r.elem);
 
-    if is_special_type(inner, &special.ctx) {
-        return if r.mutability.is_some() {
-            Ok(ParamSource::PartsCtx)
-        } else {
-            Err(syn::Error::new(
-                original_ty.span(),
-                "`PartsCtx` parameter must be `&mut PartsCtx`",
-            ))
-        };
-    }
-
-    if is_special_type(inner, &special.scope) {
-        return if r.mutability.is_some() {
-            Ok(ParamSource::RequestScope)
-        } else {
-            Err(syn::Error::new(
-                original_ty.span(),
-                "`RequestScope` parameter must be `&mut RequestScope`",
-            ))
-        };
-    }
-
-    if r.mutability.is_some() {
-        Ok(ParamSource::ScopeMut(inner.clone()))
-    } else {
-        Ok(ParamSource::ScopeRef(inner.clone()))
+    match special.match_kind(inner) {
+        Some(SpecialKind::PartsCtx) => {
+            if r.mutability.is_some() {
+                Ok(ParamSource::PartsCtx)
+            } else {
+                Err(syn::Error::new(
+                    original_ty.span(),
+                    "`PartsCtx` parameter must be `&mut PartsCtx`",
+                ))
+            }
+        }
+        Some(SpecialKind::RequestScope) => {
+            if r.mutability.is_some() {
+                Ok(ParamSource::RequestScope)
+            } else {
+                Err(syn::Error::new(
+                    original_ty.span(),
+                    "`RequestScope` parameter must be `&mut RequestScope`",
+                ))
+            }
+        }
+        Some(SpecialKind::RawBody) => Err(syn::Error::new(
+            original_ty.span(),
+            "`RawBody` parameter must be taken by value (`RawBody`), not by reference",
+        )),
+        None => {
+            if r.mutability.is_some() {
+                Ok(ParamSource::ScopeMut(inner.clone()))
+            } else {
+                Ok(ParamSource::ScopeRef(inner.clone()))
+            }
+        }
     }
 }
 
@@ -193,7 +239,7 @@ fn validate_plans(plans: &[ParamPlan], sig: &syn::Signature, macro_name: &str) -
             ParamSource::RequestScope => s.seen_scope += 1,
             ParamSource::ScopeRef(_) => s.immut_borrowed_from_scope += 1,
             ParamSource::ScopeMut(_) => s.mut_borrowed_from_scope += 1,
-            ParamSource::ScopeTake => {}
+            ParamSource::ScopeTake | ParamSource::RawBody => {}
         }
     }
 
@@ -260,7 +306,6 @@ fn build_param_plans(
 ) -> syn::Result<(Vec<ParamPlan>, Option<FnArg>)> {
     let mut plans = Vec::new();
     let mut kept_param: Option<FnArg> = None;
-    let mut found_first_value = false;
 
     for param in f.sig.inputs.iter() {
         let FnArg::Typed(pt) = param else {
@@ -274,9 +319,17 @@ fn build_param_plans(
         let ty = (*pt.ty).clone();
         let source = classify_param(&ty, special)?;
 
+        if matches!(source, ParamSource::RawBody) && !matches!(mode, ExpansionMode::Map) {
+            return Err(syn::Error::new_spanned(
+                param,
+                "`RawBody` is only available in #[apigate::map]",
+            ));
+        }
+
         match &source {
-            ParamSource::ScopeTake if mode.keeps_first_owned_param() && !found_first_value => {
-                found_first_value = true;
+            ParamSource::ScopeTake | ParamSource::RawBody
+                if mode.keeps_first_owned_param() && kept_param.is_none() =>
+            {
                 kept_param = Some(param.clone());
             }
             _ => {
@@ -294,6 +347,7 @@ fn build_bindings(
     ctx_ident: &syn::Ident,
     scope_ident: &syn::Ident,
 ) -> syn::Result<Vec<Stmt>> {
+    let mut raw_tokens = Vec::<TokenStream2>::new();
     let mut ctx_tokens = Vec::<TokenStream2>::new();
     let mut take_tokens = Vec::<TokenStream2>::new();
     let mut get_tokens = Vec::<TokenStream2>::new();
@@ -336,12 +390,19 @@ fn build_bindings(
                         .ok_or_else(|| #err)?;
                 });
             }
+            ParamSource::RawBody => {
+                let err = missing_from_scope_tokens(apigate, ty);
+                raw_tokens.push(quote! {
+                    let #pat: #ty = #scope_ident.raw_body_cloned().ok_or_else(|| #err)?;
+                });
+            }
         }
     }
 
     let mut stmts = Vec::new();
-    for tokens in ctx_tokens
+    for tokens in raw_tokens
         .iter()
+        .chain(ctx_tokens.iter())
         .chain(take_tokens.iter())
         .chain(get_tokens.iter())
         .chain(get_mut_tokens.iter())
@@ -351,6 +412,135 @@ fn build_bindings(
     }
 
     Ok(stmts)
+}
+
+/// Runs the user body in a non-`move` `async` block and yields its `MapResult` output.
+fn run_user_body(apigate: &TokenStream2, original: &[Stmt]) -> TokenStream2 {
+    quote! {
+        {
+            let __apigate_result: #apigate::MapResult<_> = async { #(#original)* }.await;
+            __apigate_result
+        }?
+    }
+}
+
+/// Wrapper body for *every* map. Run the user body, then dispatch its output
+/// through the autoref marker [`Finisher`]
+fn finish_block(apigate: &TokenStream2, original: Vec<Stmt>) -> syn::Block {
+    let run = run_user_body(apigate, &original);
+    syn::parse_quote!({
+        let __apigate_output = #run;
+        let __apigate_payload = {
+            use #apigate::__private::Finish as _;
+            #apigate::__private::Finisher::<__apigate_format, _>::for_output(&__apigate_output)
+                .apigate_finish(__apigate_output)?
+        };
+        ::std::result::Result::Ok(#apigate::__private::BodyOutcome::from(__apigate_payload))
+    })
+}
+
+/// Extracts a map's declared return type for the [`finish_predicate`] bound.
+fn map_return_type(output: &ReturnType) -> syn::Result<Type> {
+    match output {
+        ReturnType::Type(_, ty) => Ok((**ty).clone()),
+        ReturnType::Default => Err(syn::Error::new_spanned(
+            output,
+            "#[apigate::map] must return `apigate::MapResult<T>`",
+        )),
+    }
+}
+
+/// Rewrites every non-`'static` lifetime in a type to a fresh HRTB binder,
+/// collecting the binders. Turns a borrowing output `Out<'_>` into `Out<'__apigate_o0>`
+/// plus the binder list, which [`finish_predicate`] quantifies in the `Finish` bound.
+struct HrtbRewriter {
+    binders: Vec<Lifetime>,
+}
+
+impl HrtbRewriter {
+    fn fresh(&mut self) -> Lifetime {
+        let lt = Lifetime::new(
+            &format!("'__apigate_o{}", self.binders.len()),
+            Span::call_site(),
+        );
+        self.binders.push(lt.clone());
+        lt
+    }
+}
+
+impl VisitMut for HrtbRewriter {
+    fn visit_lifetime_mut(&mut self, lt: &mut Lifetime) {
+        if lt.ident != "static" {
+            *lt = self.fresh();
+        }
+    }
+
+    fn visit_type_reference_mut(&mut self, reference: &mut TypeReference) {
+        let replace = reference
+            .lifetime
+            .as_ref()
+            .is_none_or(|lt| lt.ident != "static");
+        if replace {
+            reference.lifetime = Some(self.fresh());
+        }
+        self.visit_type_mut(&mut reference.elem);
+    }
+}
+
+/// Builds the map wrapper's single autoref `Finish` predicate over the declared
+/// return type `RET`:
+/// `for<'__apigate_m[, ..]> &'m Finisher<F, <RET as MapOutput>::Output>: Finish<F, <RET as MapOutput>::Output>`.
+fn finish_predicate(apigate: &TokenStream2, return_ty: &Type) -> WherePredicate {
+    let mut ty = return_ty.clone();
+    let mut rewriter = HrtbRewriter {
+        binders: Vec::new(),
+    };
+    rewriter.visit_type_mut(&mut ty);
+
+    let marker = Lifetime::new("'__apigate_m", Span::call_site());
+    let mut binders = rewriter.binders;
+    binders.push(marker.clone());
+
+    // The map output `T`, projected out of the declared `MapResult<T>`; named
+    // once so both sides of the bound stay in lockstep.
+    let output = quote!(<#ty as #apigate::__private::MapOutput>::Output);
+    syn::parse_quote!(
+        for<#(#binders),*> &#marker #apigate::__private::Finisher<__apigate_format, #output>:
+            #apigate::__private::Finish<__apigate_format, #output>
+    )
+}
+
+/// Applies the map output protocol to the wrapper `f`: makes it generic over the
+/// format `__apigate_format`.
+fn apply_map_output(
+    f: &mut ItemFn,
+    apigate: &TokenStream2,
+    original: Vec<Stmt>,
+) -> syn::Result<Vec<Stmt>> {
+    let return_ty = map_return_type(&f.sig.output)?;
+
+    // Generic over the format `F` the route supplies via turbofish; its `Out`
+    // associated type decides the wire payload.
+    f.sig
+        .generics
+        .params
+        .push(syn::parse_quote!(__apigate_format));
+    f.sig.output = syn::parse_quote!(
+        -> #apigate::MapResult<
+            #apigate::__private::BodyOutcome<<__apigate_format as #apigate::__private::MapFormat>::Out>
+        >
+    );
+    {
+        let where_clause = f.sig.generics.make_where_clause();
+        where_clause
+            .predicates
+            .push(syn::parse_quote!(__apigate_format: #apigate::__private::MapFormat));
+        where_clause
+            .predicates
+            .push(finish_predicate(apigate, &return_ty));
+    }
+
+    Ok(finish_block(apigate, original).stmts)
 }
 
 // ---------------------------------------------------------------------------
@@ -391,24 +581,44 @@ pub(crate) fn expand_fn_params(
 
     validate_plans(&plans, &f.sig, macro_name)?;
 
-    // Rewrite parameter list: [input,] ctx, scope
-    f.sig.inputs.clear();
-    if let Some(param) = kept_param {
-        f.sig.inputs.push(param);
-    }
-    f.sig
-        .inputs
-        .push(syn::parse_quote!(#ctx_ident: &mut #apigate::PartsCtx<'_>));
-    f.sig
-        .inputs
-        .push(syn::parse_quote!(#scope_ident: &mut #apigate::RequestScope<'_>));
+    // Only the bindings reference the generated `ctx`/`scope` params; name them
+    // `_` when nothing uses them so generated wrappers stay warning-free.
+    let ctx_used = plans.iter().any(|p| p.source.binds_ctx());
+    let scope_used = plans.iter().any(|p| p.source.binds_scope());
+    let ctx_pat: Pat = if ctx_used {
+        syn::parse_quote!(#ctx_ident)
+    } else {
+        syn::parse_quote!(_)
+    };
+    let scope_pat: Pat = if scope_used {
+        syn::parse_quote!(#scope_ident)
+    } else {
+        syn::parse_quote!(_)
+    };
 
-    let generated_stmts = build_bindings(&plans, &apigate, &ctx_ident, &scope_ident)?;
-    if !generated_stmts.is_empty() {
-        let original = std::mem::take(&mut f.block.stmts);
-        f.block.stmts = generated_stmts;
-        f.block.stmts.extend(original);
+    // Rewrite parameter list: [input,] ctx, scope[, finisher]
+    f.sig.inputs.clear();
+    if let Some(kept) = kept_param {
+        f.sig.inputs.push(kept);
     }
+    f.sig
+        .inputs
+        .push(syn::parse_quote!(#ctx_pat: &mut #apigate::PartsCtx<'_>));
+    f.sig
+        .inputs
+        .push(syn::parse_quote!(#scope_pat: &mut #apigate::RequestScope<'_>));
+
+    let bindings = build_bindings(&plans, &apigate, &ctx_ident, &scope_ident)?;
+    let original = std::mem::take(&mut f.block.stmts);
+
+    let body_stmts = if matches!(mode, ExpansionMode::Map) {
+        apply_map_output(&mut f, &apigate, original)?
+    } else {
+        original
+    };
+
+    f.block.stmts = bindings;
+    f.block.stmts.extend(body_stmts);
 
     Ok(quote!(#f))
 }

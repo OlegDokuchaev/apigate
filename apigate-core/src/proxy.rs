@@ -77,24 +77,20 @@ fn rewrite_path_and_query(
     let query = uri.query();
 
     match &meta.rewrite {
-        Rewrite::Static(fixed) => {
-            if query.is_none() {
-                Ok(Some(fixed.no_query().clone()))
-            } else {
-                Ok(Some(make_path_and_query(fixed.raw(), query)?))
-            }
-        }
+        Rewrite::Static(fixed) => match query {
+            None => Ok(Some(fixed.no_query().clone())),
+            Some(q) => Ok(Some(make_path_and_query(fixed.raw(), q)?)),
+        },
 
         Rewrite::StripPrefix => {
             let stripped = strip_prefix(uri.path(), meta.prefix);
 
-            if query.is_none() {
-                Ok(Some(
+            match query {
+                None => Ok(Some(
                     PathAndQuery::try_from(stripped)
                         .map_err(|_| ProxyErrorKind::InvalidUpstreamUri)?,
-                ))
-            } else {
-                Ok(Some(make_path_and_query(stripped, query)?))
+                )),
+                Some(q) => Ok(Some(make_path_and_query(stripped, q)?)),
             }
         }
 
@@ -102,9 +98,11 @@ fn rewrite_path_and_query(
             let stripped = strip_prefix(uri.path(), meta.prefix);
 
             let rendered =
-                render_template(tpl, stripped).ok_or(ProxyErrorKind::InvalidUpstreamUri)?;
+                render_template(tpl, stripped, query).ok_or(ProxyErrorKind::InvalidUpstreamUri)?;
 
-            Ok(Some(make_path_and_query_owned(rendered, query)?))
+            PathAndQuery::try_from(rendered)
+                .map(Some)
+                .map_err(|_| ProxyErrorKind::InvalidUpstreamUri)
         }
     }
 }
@@ -124,13 +122,18 @@ fn strip_prefix<'a>(incoming_path: &'a str, prefix: &str) -> &'a str {
 // Template rendering
 // ---------------------------------------------------------------------------
 
-/// Substitutes captured path parameters into the destination template.
+/// Substitutes captured path parameters into the destination template and appends the query.
 #[inline]
-fn render_template(tpl: &RewriteTemplate, stripped_path: &str) -> Option<String> {
+fn render_template(
+    tpl: &RewriteTemplate,
+    stripped_path: &str,
+    query: Option<&str>,
+) -> Option<String> {
     let captures = capture_raw(tpl.src, stripped_path)?;
 
     let extra: usize = captures.iter().map(|r| r.len()).sum();
-    let mut out = String::with_capacity(tpl.static_len + extra);
+    let query_len = query.map_or(0, |q| 1 + q.len());
+    let mut out = String::with_capacity(tpl.static_len + extra + query_len);
 
     for chunk in tpl.dst {
         match chunk {
@@ -139,6 +142,11 @@ fn render_template(tpl: &RewriteTemplate, stripped_path: &str) -> Option<String>
                 out.push_str(&stripped_path[captures[*src_index as usize].clone()]);
             }
         }
+    }
+
+    if let Some(q) = query {
+        out.push('?');
+        out.push_str(q);
     }
 
     Some(out)
@@ -188,32 +196,14 @@ fn capture_raw(src: &[SrcSeg], stripped_path: &str) -> Option<SmallVec<[Range<us
 // PathAndQuery builders
 // ---------------------------------------------------------------------------
 
-/// Builds a `PathAndQuery` from a borrowed path and an optional query string.
+/// Joins a borrowed path with a query into a `PathAndQuery`.
 #[inline]
-fn make_path_and_query(path: &str, query: Option<&str>) -> Result<PathAndQuery, ProxyErrorKind> {
-    if let Some(q) = query {
-        let mut s = String::with_capacity(path.len() + 1 + q.len());
-        s.push_str(path);
-        s.push('?');
-        s.push_str(q);
-        PathAndQuery::try_from(s).map_err(|_| ProxyErrorKind::InvalidUpstreamUri)
-    } else {
-        PathAndQuery::try_from(path).map_err(|_| ProxyErrorKind::InvalidUpstreamUri)
-    }
-}
-
-/// Builds a `PathAndQuery` from an owned path and an optional query string.
-#[inline]
-fn make_path_and_query_owned(
-    mut path: String,
-    query: Option<&str>,
-) -> Result<PathAndQuery, ProxyErrorKind> {
-    if let Some(q) = query {
-        path.reserve(1 + q.len());
-        path.push('?');
-        path.push_str(q);
-    }
-    PathAndQuery::try_from(path).map_err(|_| ProxyErrorKind::InvalidUpstreamUri)
+fn make_path_and_query(path: &str, query: &str) -> Result<PathAndQuery, ProxyErrorKind> {
+    let mut s = String::with_capacity(path.len() + 1 + query.len());
+    s.push_str(path);
+    s.push('?');
+    s.push_str(query);
+    PathAndQuery::try_from(s).map_err(|_| ProxyErrorKind::InvalidUpstreamUri)
 }
 
 // ---------------------------------------------------------------------------

@@ -12,10 +12,10 @@ mod sales {
     use super::*;
 
     #[apigate::get("/ping")]
-    async fn ping() {}
+    fn ping() {}
 
     #[apigate::post("/buy", json = BuyInput, before = [auth], map = remap_buy)]
-    async fn buy() {}
+    fn buy() {}
 }
 ```
 
@@ -66,11 +66,12 @@ Full route shape:
     to = "/upstream/{id}",
     path = PathParams,
     query = QueryInput,
+    json = BodyInput,
     before = [auth, inject_headers],
-    map = remap,
+    map = remap_body,
     policy = "sticky_by_id",
 )]
-async fn route_name() {}
+fn route_name() {}
 ```
 
 Route arguments:
@@ -80,15 +81,15 @@ Route arguments:
 | `"/path"` | Public route path relative to the service prefix. Supports `{param}` segments. |
 | `to = "/path"` | Upstream path rewrite. Without `to`, ApiGate strips the service prefix and forwards the remaining path. Supports `{param}` template captures. |
 | `path = T` | Deserializes typed path parameters with axum. `T` should be `Deserialize + Clone + Send + Sync + 'static`. |
-| `query = T` | Validates query string as `T`. With `map`, serializes mapped output back into the query string. |
+| `query = T` | Deserializes typed query parameters and stores them in `RequestScope`. `T` should be `Deserialize + Clone + Send + Sync + 'static`. |
 | `json = T` | Validates JSON body as `T`. With `map`, serializes mapped output as a new JSON body. |
 | `form = T` | Validates `application/x-www-form-urlencoded` data as `T`. With `map`, serializes mapped output back as form data or query data for GET/HEAD. |
-| `multipart` | Enables multipart passthrough. The body is not read or buffered. |
+| `multipart` | Enables multipart passthrough. Without a `map` the body is not read or buffered; attaching a `map` reads it and hands it over as `RawBody`. |
 | `before = [...]` | Hooks executed before proxying. They run in the listed order. |
-| `map = fn_name` | Typed request transformation for `query`, `json`, or `form`. Not supported with `multipart`. |
+| `map = fn_name` | Request transformation. Works with `json`, `form`, `multipart`, or no body data (with `multipart` or no body data the map takes a `RawBody` input). Return a value to replace the body, or `()` to validate only and forward the body unchanged. |
 | `policy = "name"` | Route-level policy override. |
 
-Only one body/data mode can be used per route: `query`, `json`, `form`, or `multipart`.
+`query = T` is independent from body handling and can be combined with `json`, `form`, or `multipart`. Only one body mode can be used per route: `json`, `form`, or `multipart`.
 
 ### Path Rewrites
 
@@ -98,7 +99,7 @@ No `to` means strip the service prefix:
 #[apigate::service(prefix = "/sales")]
 mod sales {
     #[apigate::get("/ping")]
-    async fn ping() {}
+    fn ping() {}
 }
 ```
 
@@ -108,14 +109,14 @@ Static rewrite:
 
 ```rust
 #[apigate::get("/public", to = "/internal")]
-async fn public_alias() {}
+fn public_alias() {}
 ```
 
 Template rewrite:
 
 ```rust
 #[apigate::get("/item/{id}/review", to = "/api/v2/reviews/{id}")]
-async fn item_review() {}
+fn item_review() {}
 ```
 
 ## Typed Inputs
@@ -136,26 +137,63 @@ mod sales {
     use super::*;
 
     #[apigate::get("/{id}", path = SalePath)]
-    async fn get_sale() {}
+    fn get_sale() {}
 }
 ```
 
 Path values are extracted before hooks and inserted into `RequestScope`. Hooks and maps can request `&SalePath` or owned `SalePath` as parameters.
 
-### Query, JSON, and Form
+### Query Parameters
 
 ```rust
+#[derive(Debug, Clone, serde::Deserialize)]
+struct SearchQuery {
+    q: String,
+}
+
 #[apigate::get("/search", query = SearchQuery)]
-async fn search() {}
-
-#[apigate::post("/buy", json = BuyInput)]
-async fn buy() {}
-
-#[apigate::post("/legacy", form = LegacyForm)]
-async fn legacy() {}
+fn search() {}
 ```
 
-Without `map`, ApiGate validates the input and forwards the original body/query data. For `json` and `form` bodies, validation requires reading the body up to `map_body_limit`.
+Query values are extracted before hooks and inserted into `RequestScope`, like path values. Hooks and maps can request `&SearchQuery` or owned `SearchQuery` as parameters.
+
+List values use repeated query keys, for example `ids=1&ids=2` deserializes into `Vec<u32>` and serializes back as `ids=1&ids=2`. Bracketed keys such as `ids[]=1&ids[]=2` are also supported when the field uses `#[serde(rename = "ids[]")]`.
+
+To rewrite query data before proxying, use a hook and `PartsCtx::set_query`:
+
+```rust
+#[derive(serde::Serialize)]
+struct UpstreamSearch {
+    query: String,
+}
+
+#[apigate::hook]
+async fn rewrite_query(
+    input: &SearchQuery,
+    ctx: &mut apigate::PartsCtx,
+) -> apigate::HookResult {
+    ctx.set_query(&UpstreamSearch {
+        query: input.q.trim().to_owned(),
+    })?;
+    Ok(())
+}
+
+#[apigate::get("/search", query = SearchQuery, before = [rewrite_query])]
+fn rewritten_search() {}
+```
+
+### JSON and Form
+
+```rust
+
+#[apigate::post("/buy", json = BuyInput)]
+fn buy() {}
+
+#[apigate::post("/legacy", form = LegacyForm)]
+fn legacy() {}
+```
+
+Without `map`, ApiGate validates the input and forwards the original body data. Validation requires reading the body up to `map_body_limit`.
 
 With `map`, ApiGate validates the input, calls your mapper, and forwards the mapped output.
 
@@ -163,10 +201,12 @@ With `map`, ApiGate validates the input, calls your mapper, and forwards the map
 
 ```rust
 #[apigate::post("/upload", multipart, before = [auth])]
-async fn upload() {}
+fn upload() {}
 ```
 
-Multipart bodies are proxied as streaming passthrough. ApiGate does not read or buffer the file body. `map` is intentionally not supported for multipart routes.
+Without a `map`, multipart bodies are proxied as streaming passthrough — ApiGate does not read or buffer the file body. Attaching a `map` opts into buffering: the unparsed bytes are read and handed to the map as `RawBody` (a typed `json`/`form` map cannot pair with `multipart`). Return a new body to rewrite the upload, or `()` to inspect and forward it unchanged.
+
+When a `map` is attached, the request `Content-Type` is checked first: it must start with `multipart/form-data` and carry a `boundary` parameter, otherwise the request is rejected with `415 Unsupported Media Type` before the map runs. Passthrough multipart routes (no `map`) do not check the header.
 
 ## Hooks
 
@@ -186,7 +226,7 @@ async fn auth(ctx: &mut apigate::PartsCtx) -> apigate::HookResult {
 }
 
 #[apigate::get("/protected", before = [auth])]
-async fn protected() {}
+fn protected() {}
 ```
 
 `PartsCtx` exposes the request head:
@@ -197,6 +237,7 @@ async fn protected() {}
 | `route_path()` | Route path relative to the service prefix. |
 | `method()` | Current HTTP method. |
 | `uri()` / `uri_mut()` | Read or mutate the request URI. |
+| `set_query(&value)` | Serialize a value with `serde_html_form` and replace the URI query string. |
 | `headers()` / `headers_mut()` | Read or mutate headers. |
 | `header(name)` | Read a UTF-8 header as `Option<&str>`. |
 | `set_header(name, value)` | Insert or replace a header. |
@@ -206,7 +247,7 @@ async fn protected() {}
 
 ## Maps
 
-Maps transform typed `query`, `json`, or `form` inputs before proxying.
+Maps transform the request body before proxying: a typed `json`/`form` input, or the raw bytes (`RawBody`) for `multipart` or no body data. Query rewrites belong in hooks through `PartsCtx::set_query`.
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -237,16 +278,155 @@ async fn remap_buy(input: PublicBuy) -> apigate::MapResult<UpstreamBuy> {
 }
 
 #[apigate::post("/buy", json = PublicBuy, map = remap_buy)]
-async fn buy() {}
+fn buy() {}
 ```
 
 Mapping behavior:
 
 | Route data | Map output handling |
 |---|---|
-| `query = T` | Serialized with `serde_urlencoded` and written into the URI query string. |
 | `json = T` | Serialized with `serde_json` and sent as a new JSON body. |
 | `form = T` | Serialized with `serde_urlencoded`; sent as a form body for non-GET/HEAD and as query string for GET/HEAD. |
+| `multipart` or no body data | The map takes `RawBody`; its output (`RawBody`/`Bytes`/`Vec<u8>`/`String`, or `()` to keep) is sent as the new body. |
+| any of the above, returning `()` | Validate-only: the original request body is forwarded unchanged (see below). |
+
+### Borrowing map output
+
+A typed (`json`/`form`) map serializes its output *inside* the generated wrapper,
+while `input` is still alive, so the output may borrow from `input` (or shared
+`&State`) instead of allocating — no `.to_string()` for pass-through fields:
+
+```rust
+#[derive(serde::Serialize)]
+struct Out<'a> {
+    title: &'a str, // a slice of `input`
+    code: &'static str,
+}
+
+#[apigate::map]
+async fn remap(input: Form) -> apigate::MapResult<Out<'_>> {
+    Ok(Out { title: input.title.trim(), code: "P" })
+}
+```
+
+Borrow what you do not own (`input`, `&State`); values you compute locally, move
+into the output (borrowing a local fails to compile). One map serves both `json`
+and `form` routes — the wrapper serializes per the route's body kind.
+
+### Validate-only maps
+
+A map that returns `()` does **not** replace the body: the original request bytes
+are forwarded upstream unchanged. Use it to validate or inspect a typed body (and
+optionally mutate headers via `&mut PartsCtx`) without paying for re-serialization
+— and without risking byte drift (field order, whitespace, number formatting):
+
+```rust
+#[apigate::map]
+async fn validate(input: CreateUser, ctx: &mut apigate::PartsCtx) -> apigate::MapResult<()> {
+    if input.email.is_empty() {
+        return Err(apigate::ApigateError::bad_request("email required"));
+    }
+    ctx.set_header("x-validated", "1")?;
+    Ok(()) // original body forwarded as-is
+}
+
+#[apigate::post("/users", json = CreateUser, map = validate)]
+fn create_user() {}
+```
+
+The typed input is still parsed first, so malformed bodies are rejected before the
+map runs. This works for `json`, `form`, and `RawBody` maps alike.
+
+Only `()` means "keep". `Option<T>` is a normal serialized value — `Some(v)`
+becomes the body `v`, and `None` becomes a JSON `null` (or empty form), **not** a
+kept body. Return `()` to keep, a value (or `Option<T>`) to replace.
+
+### Raw Request Bytes
+
+Maps can read the exact request bytes through `apigate::RawBody`. These are the
+original bytes, before parsing, so this is the right place to verify signatures
+or checksums computed over the raw body (re-serializing the parsed value would
+change the bytes).
+
+Beside a typed `json`/`form` input, declare `RawBody` as an extra by-value
+parameter:
+
+```rust
+#[derive(serde::Deserialize)]
+struct WebhookEvent {
+    id: String,
+}
+
+#[derive(serde::Serialize)]
+struct UpstreamEvent {
+    event_id: String,
+    verified: bool,
+}
+
+#[apigate::map]
+async fn verify_and_remap(
+    input: WebhookEvent,
+    raw: apigate::RawBody,
+    ctx: &mut apigate::PartsCtx,
+) -> apigate::MapResult<UpstreamEvent> {
+    if ctx.header("x-signature") != Some(&expected_signature(raw.as_bytes())) {
+        return Err(apigate::ApigateError::unauthorized("invalid signature"));
+    }
+    Ok(UpstreamEvent { event_id: input.id, verified: true })
+}
+
+#[apigate::post("/events", json = WebhookEvent, map = verify_and_remap)]
+fn events() {}
+```
+
+`RawBody` is owned (a cheap reference-counted `Bytes` clone), so it composes
+with `&T` shared state and `&mut PartsCtx`, unlike `&mut RequestScope`.
+
+A route can also declare `map` with no `json`/`form`. The map then takes
+`RawBody` as its input and returns any `impl Into<Body>` (`RawBody`, `Bytes`,
+`Vec<u8>`, `String`). Returning `raw` forwards the bytes with no copy:
+
+```rust
+#[apigate::map]
+async fn forward_raw(raw: apigate::RawBody) -> apigate::MapResult<apigate::RawBody> {
+    Ok(raw) // forward the exact bytes, no allocation
+}
+
+#[apigate::post("/raw", map = forward_raw)]
+fn raw() {}
+```
+
+To forward part of the body, return a zero-copy `Bytes` view (a reference-counted
+slice that shares the buffer) via `raw.slice(range)` or `raw.into_bytes()` — not a
+borrowed `&[u8]`, which cannot outlive the map:
+
+```rust
+#[apigate::map]
+async fn first_line(raw: apigate::RawBody) -> apigate::MapResult<apigate::Bytes> {
+    let end = raw.iter().position(|&b| b == b'\n').map_or(raw.len(), |i| i + 1);
+    Ok(raw.slice(..end)) // zero-copy; use raw.into_bytes() for the whole body
+}
+```
+
+A raw map can also return `()` to validate or inspect the bytes without replacing
+the body — the original request body is forwarded unchanged (same as a typed
+validate-only map):
+
+```rust
+#[apigate::map]
+async fn inspect_raw(raw: apigate::RawBody, ctx: &mut apigate::PartsCtx) -> apigate::MapResult<()> {
+    ctx.set_header("x-raw-len", raw.len().to_string())?;
+    Ok(()) // body forwarded as-is
+}
+```
+
+A raw map's output is moved into the body by type: `RawBody`, `Bytes`, `Vec<u8>`,
+`String`, `&'static [u8]`/`&'static str`, or `()` (keep). For any other
+`Into<Body>` type, convert it yourself with `Ok(value.into())`.
+
+`RawBody` requires a buffered body, so it is not available for `form` GET/HEAD
+routes (which read the query string instead); requesting it there fails with a
+`MissingFromScope` pipeline error. The `map` example shows both forms.
 
 ## Hook and Map Parameters
 
@@ -259,7 +439,8 @@ Mapping behavior:
 | `&T` | Local per-request value first, then shared app state. | `config: &AuthConfig` |
 | `&mut T` | Local per-request value only. | `counter: &mut RequestCounter` |
 | `T` in a hook | `scope.take::<T>()`; falls back to cloning shared state. | `path: SalePath` |
-| First owned `T` in a map | Typed input from `query`, `json`, or `form`. | `input: PublicBuy` |
+| First owned `T` in a map | Typed input from `json` or `form` (or `RawBody` for `multipart`/no body data). | `input: PublicBuy` |
+| `RawBody` in a map | Owned clone of the raw request bytes. It is the map input when the route has `multipart` or no `json`/`form`. | `raw: apigate::RawBody` |
 | Additional owned `T` in a map | `scope.take::<T>()`; falls back to cloning shared state. | `path: SalePath` |
 
 Rules enforced by the macros:
@@ -269,6 +450,7 @@ Rules enforced by the macros:
 - At most one extracted `&mut T` parameter.
 - `&mut RequestScope` cannot be combined with extracted `&T` or `&mut T` parameters.
 - Extracted `&mut T` cannot be combined with extracted `&T` parameters.
+- `RawBody` is map-only and must be taken by value (not by reference).
 - Hook and map functions must be `async`.
 
 Example using shared state and per-request path data:
@@ -303,7 +485,7 @@ mod sales {
     use super::*;
 
     #[apigate::get("/{id}", path = SalePath, before = [require_key, add_sale_header])]
-    async fn get_sale() {}
+    fn get_sale() {}
 }
 ```
 
@@ -357,6 +539,7 @@ async fn log_request(meta: RequestMeta) -> apigate::HookResult {
 | `insert(value)` | Insert local per-request value. |
 | `take::<T>()` | Remove local value, or clone from shared app state if absent. |
 | `take_body()` | Take request body ownership. Used by generated pipelines. |
+| `raw_body()` | Raw request body bytes (`&[u8]`) buffered by a map pipeline, if any. |
 | `body_limit()` | Current generated pipeline body limit. |
 
 ## Error Handling
@@ -651,7 +834,7 @@ Use a service-level policy:
 #[apigate::service(prefix = "/sales", policy = "sticky_user")]
 mod sales {
     #[apigate::get("/user")]
-    async fn user() {}
+    fn user() {}
 }
 ```
 
@@ -659,7 +842,7 @@ Override per route:
 
 ```rust
 #[apigate::get("/{id}", policy = "sticky_id")]
-async fn by_id() {}
+fn by_id() {}
 ```
 
 Policy priority:
@@ -834,4 +1017,3 @@ apigate::run_with(addr, app, config).await?;
 `ServeConfig` also supports listener buffer sizes, IPv6-only binding, and
 `SO_REUSEPORT` on supported Unix platforms. Use `run_router_with` for the same
 socket options with a manually composed router.
-

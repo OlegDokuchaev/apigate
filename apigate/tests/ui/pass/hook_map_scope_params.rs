@@ -6,7 +6,10 @@ struct RequestMeta {
 }
 
 struct Input;
+
+#[derive(serde::Serialize)]
 struct Output;
+
 struct AppState;
 
 #[apigate::hook]

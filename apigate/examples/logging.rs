@@ -29,10 +29,10 @@ mod sales {
     use super::*;
 
     #[apigate::get("/ping")]
-    async fn ping() {}
+    fn ping() {}
 
     #[apigate::post("/buy", json = BuyInput, before = [require_auth], map = passthrough_buy)]
-    async fn buy() {}
+    fn buy() {}
 }
 
 fn init_tracing() {

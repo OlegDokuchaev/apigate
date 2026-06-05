@@ -50,6 +50,12 @@ impl MethodKind {
         }
     }
 
+    /// Whether requests for this method carry their data in the query string
+    /// rather than the request body.
+    fn body_in_query(self) -> bool {
+        matches!(self, Self::Get | Self::Head)
+    }
+
     /// Emits `apigate::Method::*` variant tokens.
     fn to_tokens(self, apigate_path: &TokenStream2) -> TokenStream2 {
         match self {
@@ -73,24 +79,19 @@ impl MethodKind {
 pub(crate) enum DataKind {
     #[default]
     None,
-    Query(Type),
     Json(Type),
     Form(Type),
     Multipart,
 }
 
 impl DataKind {
-    fn allows_map(&self) -> bool {
-        matches!(self, Self::Query(_) | Self::Json(_) | Self::Form(_))
-    }
-
     /// Transitions to `next`, erroring if a data kind was already chosen.
     fn set(self, next: DataKind, span: Span) -> Result<DataKind> {
         match self {
             Self::None => Ok(next),
             _ => Err(Error::new(
                 span,
-                "only one of `query`, `json`, `form`, or `multipart` may be specified",
+                "only one of `json`, `form`, or `multipart` may be specified",
             )),
         }
     }
@@ -107,33 +108,9 @@ pub(crate) struct RouteArgs {
     pub policy: Option<LitStr>,
     pub before: Vec<Path>,
     pub map: Option<Path>,
+    pub query_type: Option<Type>,
     pub data: DataKind,
     pub path_type: Option<Type>,
-}
-
-impl RouteArgs {
-    /// Checks cross-field invariants (e.g. `map` requires a typed data kind).
-    fn validate(&self) -> Result<()> {
-        if self.map.is_some() && !self.data.allows_map() {
-            match self.data {
-                DataKind::Multipart => {
-                    return Err(Error::new(
-                        Span::call_site(),
-                        "`map` is not supported together with `multipart`",
-                    ));
-                }
-                DataKind::None => {
-                    return Err(Error::new(
-                        Span::call_site(),
-                        "`map` requires one of `query = T`, `json = T`, or `form = T`",
-                    ));
-                }
-                DataKind::Query(_) | DataKind::Json(_) | DataKind::Form(_) => {}
-            }
-        }
-
-        Ok(())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +123,7 @@ struct RouteArgsBuilder {
     policy: Option<LitStr>,
     before: Option<Vec<Path>>,
     map: Option<Path>,
+    query_type: Option<Type>,
     data: DataKind,
     path_type: Option<Type>,
 }
@@ -160,8 +138,7 @@ impl RouteArgsBuilder {
             }
             RouteArg::Map(v) => set_once(&mut self.map, v, Span::call_site(), "map")?,
             RouteArg::Query(v) => {
-                self.data =
-                    std::mem::take(&mut self.data).set(DataKind::Query(v), Span::call_site())?;
+                set_once(&mut self.query_type, v, Span::call_site(), "query")?;
             }
             RouteArg::Json(v) => {
                 self.data =
@@ -183,19 +160,17 @@ impl RouteArgsBuilder {
         Ok(())
     }
 
-    fn build(self, path: LitStr) -> Result<RouteArgs> {
-        let args = RouteArgs {
+    fn build(self, path: LitStr) -> RouteArgs {
+        RouteArgs {
             path,
             to: self.to,
             policy: self.policy,
             before: self.before.unwrap_or_default(),
             map: self.map,
+            query_type: self.query_type,
             data: self.data,
             path_type: self.path_type,
-        };
-
-        args.validate()?;
-        Ok(args)
+        }
     }
 }
 
@@ -269,7 +244,7 @@ impl Parse for RouteArgs {
             builder.apply(input.parse()?)?;
         }
 
-        builder.build(path)
+        Ok(builder.build(path))
     }
 }
 
@@ -309,6 +284,8 @@ pub(crate) fn expand_route_from_fn(
         &matched.args.data,
         matched.args.map.as_ref(),
         matched.args.path_type.as_ref(),
+        matched.args.query_type.as_ref(),
+        matched.kind.body_in_query(),
         &mut generated_items,
     )?;
 
@@ -418,6 +395,15 @@ mod tests {
     }
 
     #[test]
+    fn parses_query_independently_from_body_data() {
+        let args: RouteArgs =
+            syn::parse_str(r#""/items", query = QueryInput, json = JsonInput"#).unwrap();
+
+        assert!(args.query_type.is_some());
+        assert!(matches!(args.data, DataKind::Json(_)));
+    }
+
+    #[test]
     fn parses_route_args_with_path_type_and_multipart_flag() {
         let args: RouteArgs = syn::parse_str(r#""/{id}", path = PathParams, multipart"#).unwrap();
 
@@ -429,13 +415,22 @@ mod tests {
     #[test]
     fn rejects_duplicate_route_fields_or_unknown_arguments() {
         assert!(syn::parse_str::<RouteArgs>(r#""/items", to = "/a", to = "/b""#).is_err());
-        assert!(syn::parse_str::<RouteArgs>(r#""/items", query = A, json = B"#).is_err());
+        assert!(syn::parse_str::<RouteArgs>(r#""/items", query = A, query = B"#).is_err());
+        assert!(syn::parse_str::<RouteArgs>(r#""/items", json = A, form = B"#).is_err());
+        // `multipart` is a body mode, so it is mutually exclusive with `json`/`form`.
+        assert!(syn::parse_str::<RouteArgs>(r#""/items", multipart, json = A"#).is_err());
+        assert!(syn::parse_str::<RouteArgs>(r#""/items", form = A, multipart"#).is_err());
         assert!(syn::parse_str::<RouteArgs>(r#""/items", unknown = A"#).is_err());
     }
 
     #[test]
-    fn rejects_map_without_supported_data_kind() {
-        assert!(syn::parse_str::<RouteArgs>(r#""/items", map = remap"#).is_err());
-        assert!(syn::parse_str::<RouteArgs>(r#""/items", multipart, map = remap"#).is_err());
+    fn allows_map_with_no_body_data_or_multipart() {
+        // `map` without `json`/`form` is allowed: the map takes a `RawBody` input.
+        assert!(syn::parse_str::<RouteArgs>(r#""/items", map = remap"#).is_ok());
+        assert!(
+            syn::parse_str::<RouteArgs>(r#""/items", query = QueryInput, map = remap"#).is_ok()
+        );
+        // `map` now pairs with `multipart`: the unparsed bytes are handed to the map raw.
+        assert!(syn::parse_str::<RouteArgs>(r#""/items", multipart, map = remap"#).is_ok());
     }
 }

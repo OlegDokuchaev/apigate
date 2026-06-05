@@ -5,7 +5,7 @@ struct PathParams {
     id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct QueryInput {
     q: String,
 }
@@ -21,11 +21,16 @@ async fn auth(ctx: &mut apigate::PartsCtx<'_>) -> apigate::HookResult {
     Ok(())
 }
 
-#[apigate::map]
-async fn remap(input: QueryInput, path: &PathParams) -> apigate::MapResult<QueryOutput> {
-    Ok(QueryOutput {
+#[apigate::hook]
+async fn remap_query(
+    input: &QueryInput,
+    path: &PathParams,
+    ctx: &mut apigate::PartsCtx<'_>,
+) -> apigate::HookResult {
+    ctx.set_query(&QueryOutput {
         q: format!("{}:{}", path.id, input.q),
-    })
+    })?;
+    Ok(())
 }
 
 #[apigate::service(name = "sales", prefix = "/api/sales", policy = "default")]
@@ -35,7 +40,7 @@ mod sales {
     #[apigate::get("/{id}", path = PathParams, before = [auth])]
     async fn get_sale() {}
 
-    #[apigate::get("/{id}/search", path = PathParams, query = QueryInput, map = remap)]
+    #[apigate::get("/{id}/search", path = PathParams, query = QueryInput, before = [remap_query])]
     async fn search() {}
 
     #[apigate::post("/upload", multipart)]

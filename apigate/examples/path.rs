@@ -68,11 +68,11 @@ mod sales {
 
     /// Validates `id` as UUID and exposes path data to the hook.
     #[apigate::get("/{id}", path = SaleIdPath, before = [log_sale_access])]
-    async fn get_by_id() {}
+    fn get_by_id() {}
 
     /// Path + JSON + map: the map receives `&SaleIdPath` from scope.
     #[apigate::post("/{id}/update", path = SaleIdPath, json = UpdateSaleInput, map = remap_update_sale)]
-    async fn update_sale() {}
+    fn update_sale() {}
 }
 
 // ---------------------------------------------------------------------------

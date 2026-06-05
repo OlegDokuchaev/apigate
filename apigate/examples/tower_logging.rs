@@ -9,7 +9,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 #[apigate::service(prefix = "/sales")]
 mod sales {
     #[apigate::get("/ping")]
-    async fn ping() {}
+    fn ping() {}
 }
 
 fn init_tracing() {

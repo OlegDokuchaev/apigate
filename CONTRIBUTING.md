@@ -72,11 +72,10 @@ The GitHub Actions coverage workflow can also be started manually.
 
 Before publishing crates:
 
-1. Update `CHANGELOG.md`.
-2. Run the full local checks.
-3. Package crates in dependency order: `apigate-core`, `apigate-macros`, then `apigate`.
-4. Publish crates in the same order.
-5. Create a Git tag matching the released version.
+1. Run the full local checks.
+2. Package crates in dependency order: `apigate-core`, `apigate-macros`, then `apigate`.
+3. Publish crates in the same order.
+4. Create a Git tag matching the released version.
 
 ## Style
 

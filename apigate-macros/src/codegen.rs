@@ -1,13 +1,15 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{Ident, Item, ItemFn, Path, Result, Type};
+use syn::{Item, ItemFn, Path, Result, Type};
 
 use crate::route::DataKind;
 
 /// Generates a single `__apigate_pipeline_<fn>` that orchestrates:
-/// 1. before hooks (with ctx + scope)
-/// 2. parse/validate body (always if data type declared)
-/// 3. optional map (reads parsed input, writes transformed body)
+/// 1. parse path/query params into scope
+/// 2. before hooks (with ctx + scope)
+/// 3. parse/validate body (always if data type declared)
+/// 4. optional map (reads parsed input, writes transformed body)
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn generate_pipeline_wrapper(
     apigate_path: &TokenStream2,
     f: &ItemFn,
@@ -15,22 +17,23 @@ pub(crate) fn generate_pipeline_wrapper(
     data: &DataKind,
     map_fn: Option<&Path>,
     path_type: Option<&Type>,
+    query_type: Option<&Type>,
+    body_in_query: bool,
     generated_items: &mut Vec<Item>,
 ) -> Result<TokenStream2> {
     let has_hooks = !hooks.is_empty();
-    let has_body = matches!(
-        data,
-        DataKind::Json(_) | DataKind::Query(_) | DataKind::Form(_)
-    );
+    let has_body = matches!(data, DataKind::Json(_) | DataKind::Form(_));
     let has_path = path_type.is_some();
+    let has_query = query_type.is_some();
 
-    if !has_hooks && !has_body && map_fn.is_none() && !has_path {
+    if !has_hooks && !has_body && map_fn.is_none() && !has_path && !has_query {
         return Ok(quote!(None));
     }
 
     let pipeline_ident = format_ident!("__apigate_pipeline_{}", f.sig.ident);
 
     let path_phase = build_path_phase(path_type);
+    let query_phase = build_query_phase(query_type);
     let hook_phase = if has_hooks {
         let calls = hooks
             .iter()
@@ -39,7 +42,7 @@ pub(crate) fn generate_pipeline_wrapper(
     } else {
         quote!()
     };
-    let body_phase = build_body_phase(apigate_path, data, map_fn, &f.sig.ident)?;
+    let body_phase = build_body_phase(apigate_path, data, map_fn, body_in_query);
 
     let item: Item = syn::parse_quote! {
         #[doc(hidden)]
@@ -49,6 +52,7 @@ pub(crate) fn generate_pipeline_wrapper(
         ) -> #apigate_path::PipelineFuture<'a> {
             ::std::boxed::Box::pin(async move {
                 #path_phase
+                #query_phase
                 #hook_phase
                 #body_phase
             })
@@ -74,6 +78,20 @@ fn build_path_phase(path_type: Option<&Type>) -> TokenStream2 {
 }
 
 // ---------------------------------------------------------------------------
+// Query phase
+// ---------------------------------------------------------------------------
+
+fn build_query_phase(query_type: Option<&Type>) -> TokenStream2 {
+    match query_type {
+        Some(ty) => quote! {
+            let __apigate_query_value: #ty = ctx.extract_query::<#ty>()?;
+            scope.insert(__apigate_query_value);
+        },
+        None => quote!(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Body phase dispatch
 // ---------------------------------------------------------------------------
 
@@ -81,25 +99,14 @@ fn build_body_phase(
     apigate_path: &TokenStream2,
     data: &DataKind,
     map_fn: Option<&Path>,
-    route_fn_ident: &Ident,
-) -> Result<TokenStream2> {
+    body_in_query: bool,
+) -> TokenStream2 {
     match (map_fn, data) {
-        (None, DataKind::None | DataKind::Multipart) => {
-            let take = take_body_expr(apigate_path);
-            Ok(quote!(#take))
-        }
-        (Some(_), DataKind::Multipart) => Err(syn::Error::new_spanned(
-            route_fn_ident,
-            "`map` is not supported with `multipart`",
-        )),
-        (Some(_), DataKind::None) => Err(syn::Error::new_spanned(
-            route_fn_ident,
-            "`map` requires one of `query = T`, `json = T`, or `form = T`",
-        )),
-
-        (map_fn, DataKind::Json(ty)) => Ok(json_phase(apigate_path, ty, map_fn)),
-        (map_fn, DataKind::Query(ty)) => Ok(query_phase(apigate_path, ty, map_fn)),
-        (map_fn, DataKind::Form(ty)) => Ok(form_phase(apigate_path, ty, map_fn)),
+        (None, DataKind::None | DataKind::Multipart) => take_body_expr(apigate_path),
+        (Some(map_fn), DataKind::None) => none_map_phase(apigate_path, map_fn, false),
+        (Some(map_fn), DataKind::Multipart) => none_map_phase(apigate_path, map_fn, true),
+        (map_fn, DataKind::Json(ty)) => json_phase(apigate_path, ty, map_fn),
+        (map_fn, DataKind::Form(ty)) => form_phase(apigate_path, ty, map_fn, body_in_query),
     }
 }
 
@@ -115,21 +122,85 @@ fn take_body_expr(apigate_path: &TokenStream2) -> TokenStream2 {
     }
 }
 
-/// `let body = scope.take_body().ok_or_else(...)?;` unwraps into `Body`.
-fn take_body_let(apigate_path: &TokenStream2) -> TokenStream2 {
-    let take = take_body_expr(apigate_path);
-    quote!(let body = #take?;)
+/// Shared tail for *every* mapped phase
+fn map_replace_or_keep(
+    apigate_path: &TokenStream2,
+    map_fn: &Path,
+    format: &TokenStream2,
+    input_expr: &TokenStream2,
+    content_type: Option<&str>,
+) -> TokenStream2 {
+    let set_content_type = match content_type {
+        Some(content_type) => quote! {
+            ctx.headers_mut().insert(
+                #apigate_path::__private::http::header::CONTENT_TYPE,
+                #apigate_path::__private::http::HeaderValue::from_static(#content_type),
+            );
+        },
+        None => quote!(),
+    };
+    quote! {
+        match #map_fn::<#format>(#input_expr, &mut ctx, &mut scope).await? {
+            #apigate_path::__private::BodyOutcome::Replace(new_body) => {
+                #set_content_type
+                ctx.headers_mut().remove(#apigate_path::__private::http::header::CONTENT_LENGTH);
+                Ok(#apigate_path::__private::axum::body::Body::from(new_body))
+            }
+            #apigate_path::__private::BodyOutcome::Keep => Ok(#apigate_path::__private::axum::body::Body::from(bytes)),
+        }
+    }
 }
 
-/// Read body bytes: take body + to_bytes.
-fn read_body_bytes(apigate_path: &TokenStream2) -> TokenStream2 {
-    let take = take_body_let(apigate_path);
+// ---------------------------------------------------------------------------
+// Raw body map phase (no `json`/`form` data)
+// ---------------------------------------------------------------------------
+
+fn none_map_phase(
+    apigate_path: &TokenStream2,
+    map_fn: &Path,
+    expect_multipart: bool,
+) -> TokenStream2 {
+    let format = quote!(#apigate_path::__private::Raw);
+    let apply = map_replace_or_keep(apigate_path, map_fn, &format, &quote!(raw), None);
+    let guard = if expect_multipart {
+        content_type_guard(
+            apigate_path,
+            "multipart/form-data",
+            Some("boundary="),
+            quote!(#apigate_path::ApigatePipelineError::ExpectedMultipartFormData),
+        )
+    } else {
+        quote!()
+    };
     quote! {
-        #take
-        let limit = scope.body_limit();
-        let bytes = #apigate_path::__private::axum::body::to_bytes(body, limit)
-            .await
-            .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::RequestBodyTooLarge(err.to_string())))?;
+        #guard
+        let bytes = scope.read_body_bytes().await?;
+        let raw = scope.raw_body_cloned().ok_or_else(|| #apigate_path::ApigateError::from(
+            #apigate_path::ApigatePipelineError::MissingFromScope("RawBody")))?;
+        #apply
+    }
+}
+
+/// Emits a `Content-Type` precondition: bails with `error`
+fn content_type_guard(
+    apigate_path: &TokenStream2,
+    prefix: &str,
+    needle: Option<&str>,
+    error: TokenStream2,
+) -> TokenStream2 {
+    let extra = match needle {
+        Some(needle) => quote!(|| !content_type.contains(#needle)),
+        None => quote!(),
+    };
+    quote! {
+        let content_type = ctx
+            .headers()
+            .get(#apigate_path::__private::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        if !content_type.starts_with(#prefix) #extra {
+            return Err(#apigate_path::ApigateError::from(#error));
+        }
     }
 }
 
@@ -138,25 +209,25 @@ fn read_body_bytes(apigate_path: &TokenStream2) -> TokenStream2 {
 // ---------------------------------------------------------------------------
 
 fn json_phase(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) -> TokenStream2 {
-    let read = read_body_bytes(apigate_path);
-
     match map_fn {
-        Some(map_fn) => quote! {
-            #read
-            let input: #ty = #apigate_path::__private::serde_json::from_slice(&bytes)
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidJsonBody(err.to_string())))?;
-            let output = #map_fn(input, &mut ctx, &mut scope).await?;
-            let new_body = #apigate_path::__private::serde_json::to_vec(&output)
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::FailedSerializeMappedJson(err.to_string())))?;
-            ctx.headers_mut().insert(
-                #apigate_path::__private::http::header::CONTENT_TYPE,
-                #apigate_path::__private::http::HeaderValue::from_static("application/json"),
+        Some(map_fn) => {
+            let format = quote!(#apigate_path::__private::Json);
+            let apply = map_replace_or_keep(
+                apigate_path,
+                map_fn,
+                &format,
+                &quote!(input),
+                Some("application/json"),
             );
-            ctx.headers_mut().remove(#apigate_path::__private::http::header::CONTENT_LENGTH);
-            Ok(#apigate_path::__private::axum::body::Body::from(new_body))
-        },
+            quote! {
+                let bytes = scope.read_body_bytes().await?;
+                let input: #ty = #apigate_path::__private::serde_json::from_slice(&bytes)
+                    .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidJsonBody(err.to_string())))?;
+                #apply
+            }
+        }
         None => quote! {
-            #read
+            let bytes = scope.read_body_bytes().await?;
             let _: #ty = #apigate_path::__private::serde_json::from_slice(&bytes)
                 .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidJsonBody(err.to_string())))?;
             Ok(#apigate_path::__private::axum::body::Body::from(bytes))
@@ -165,95 +236,44 @@ fn json_phase(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) -> 
 }
 
 // ---------------------------------------------------------------------------
-// Query phase
-// ---------------------------------------------------------------------------
-
-fn query_phase(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) -> TokenStream2 {
-    let take = take_body_expr(apigate_path);
-
-    match map_fn {
-        Some(map_fn) => quote! {
-            let input: #ty = #apigate_path::__private::axum::extract::Query::<#ty>::try_from_uri(ctx.uri())
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidQuery(err.to_string())))?
-                .0;
-            let output = #map_fn(input, &mut ctx, &mut scope).await?;
-            let encoded = #apigate_path::__private::serde_urlencoded::to_string(&output)
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::FailedSerializeMappedQuery(err.to_string())))?;
-            let path = ctx.uri().path().to_string();
-            let mut path_and_query = path;
-            if !encoded.is_empty() {
-                path_and_query.push('?');
-                path_and_query.push_str(&encoded);
-            }
-            *ctx.uri_mut() = #apigate_path::__private::http::Uri::builder()
-                .path_and_query(path_and_query)
-                .build()
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::FailedRebuildUri(err.to_string())))?;
-            #take
-        },
-        None => quote! {
-            let _: #ty = #apigate_path::__private::axum::extract::Query::<#ty>::try_from_uri(ctx.uri())
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidQuery(err.to_string())))?
-                .0;
-            #take
-        },
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Form phase
 // ---------------------------------------------------------------------------
 
-fn form_phase(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) -> TokenStream2 {
-    let take = take_body_expr(apigate_path);
-
-    let get_branch = form_get_branch(apigate_path, ty, map_fn, &take);
-    let post_branch = form_post_branch(apigate_path, ty, map_fn);
-
-    quote! {
-        let method = ctx.method().clone();
-        if method == #apigate_path::__private::http::Method::GET
-            || method == #apigate_path::__private::http::Method::HEAD
-        {
-            #get_branch
-        } else {
-            let content_type = ctx
-                .headers()
-                .get(#apigate_path::__private::http::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or_default();
-            if !content_type.starts_with("application/x-www-form-urlencoded") {
-                return Err(#apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::ExpectedFormUrlEncoded));
-            }
+fn form_phase(
+    apigate_path: &TokenStream2,
+    ty: &Type,
+    map_fn: Option<&Path>,
+    body_in_query: bool,
+) -> TokenStream2 {
+    if body_in_query {
+        form_get_branch(apigate_path, ty, map_fn)
+    } else {
+        let guard = content_type_guard(
+            apigate_path,
+            "application/x-www-form-urlencoded",
+            None,
+            quote!(#apigate_path::ApigatePipelineError::ExpectedFormUrlEncoded),
+        );
+        let post_branch = form_post_branch(apigate_path, ty, map_fn);
+        quote! {
+            #guard
             #post_branch
         }
     }
 }
 
-fn form_get_branch(
-    apigate_path: &TokenStream2,
-    ty: &Type,
-    map_fn: Option<&Path>,
-    take: &TokenStream2,
-) -> TokenStream2 {
+fn form_get_branch(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) -> TokenStream2 {
+    let take = take_body_expr(apigate_path);
     match map_fn {
         Some(map_fn) => quote! {
             let raw = ctx.uri().query().unwrap_or_default();
             let input: #ty = #apigate_path::__private::serde_urlencoded::from_str(raw)
                 .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidFormQuery(err.to_string())))?;
-            let output = #map_fn(input, &mut ctx, &mut scope).await?;
-            let encoded = #apigate_path::__private::serde_urlencoded::to_string(&output)
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::FailedSerializeMappedForm(err.to_string())))?;
-            let path = ctx.uri().path().to_string();
-            let mut path_and_query = path;
-            if !encoded.is_empty() {
-                path_and_query.push('?');
-                path_and_query.push_str(&encoded);
+            if let #apigate_path::__private::BodyOutcome::Replace(encoded) =
+                #map_fn::<#apigate_path::__private::Form>(input, &mut ctx, &mut scope).await?
+            {
+                ctx.set_encoded_query(&encoded)?;
             }
-            *ctx.uri_mut() = #apigate_path::__private::http::Uri::builder()
-                .path_and_query(path_and_query)
-                .build()
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::FailedRebuildUri(err.to_string())))?;
             #take
         },
         None => quote! {
@@ -266,25 +286,25 @@ fn form_get_branch(
 }
 
 fn form_post_branch(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) -> TokenStream2 {
-    let read = read_body_bytes(apigate_path);
-
     match map_fn {
-        Some(map_fn) => quote! {
-            #read
-            let input: #ty = #apigate_path::__private::serde_urlencoded::from_bytes(&bytes)
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidFormBody(err.to_string())))?;
-            let output = #map_fn(input, &mut ctx, &mut scope).await?;
-            let encoded = #apigate_path::__private::serde_urlencoded::to_string(&output)
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::FailedSerializeMappedForm(err.to_string())))?;
-            ctx.headers_mut().insert(
-                #apigate_path::__private::http::header::CONTENT_TYPE,
-                #apigate_path::__private::http::HeaderValue::from_static("application/x-www-form-urlencoded"),
+        Some(map_fn) => {
+            let format = quote!(#apigate_path::__private::Form);
+            let apply = map_replace_or_keep(
+                apigate_path,
+                map_fn,
+                &format,
+                &quote!(input),
+                Some("application/x-www-form-urlencoded"),
             );
-            ctx.headers_mut().remove(#apigate_path::__private::http::header::CONTENT_LENGTH);
-            Ok(#apigate_path::__private::axum::body::Body::from(encoded))
-        },
+            quote! {
+                let bytes = scope.read_body_bytes().await?;
+                let input: #ty = #apigate_path::__private::serde_urlencoded::from_bytes(&bytes)
+                    .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidFormBody(err.to_string())))?;
+                #apply
+            }
+        }
         None => quote! {
-            #read
+            let bytes = scope.read_body_bytes().await?;
             let _: #ty = #apigate_path::__private::serde_urlencoded::from_bytes(&bytes)
                 .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidFormBody(err.to_string())))?;
             Ok(#apigate_path::__private::axum::body::Body::from(bytes))

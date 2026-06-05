@@ -1,0 +1,5 @@
+error: `RawBody` parameter must be taken by value (`RawBody`), not by reference
+ --> tests/ui/fail/raw_body_by_ref.rs:4:33
+  |
+4 | async fn bad(input: Input, raw: &apigate::RawBody) -> apigate::MapResult<()> {
+  |                                 ^

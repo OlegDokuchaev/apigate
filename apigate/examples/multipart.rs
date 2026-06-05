@@ -18,11 +18,11 @@ mod files {
 
     /// Multipart with auth: validates token and proxies the file body.
     #[apigate::post("/upload", multipart, before = [inject_user_headers])]
-    async fn upload() {}
+    fn upload() {}
 
     /// Multipart without hooks: plain passthrough.
     #[apigate::post("/upload-public", multipart)]
-    async fn upload_public() {}
+    fn upload_public() {}
 }
 
 #[tokio::main]
