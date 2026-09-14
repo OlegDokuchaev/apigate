@@ -35,6 +35,16 @@ mod tests {
         assert_eq!(err.status_code(), StatusCode::GATEWAY_TIMEOUT);
         assert_eq!(err.user_message(), "upstream request timed out");
         assert_eq!(err.code(), "upstream_timeout");
+
+        let err = ApigateCoreError::RouteNotFound;
+        assert_eq!(err.status_code(), StatusCode::NOT_FOUND);
+        assert_eq!(err.user_message(), "route not found");
+        assert_eq!(err.code(), "route_not_found");
+
+        let err = ApigateCoreError::MethodNotAllowed;
+        assert_eq!(err.status_code(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(err.user_message(), "method not allowed");
+        assert_eq!(err.code(), "method_not_allowed");
     }
 
     #[test]

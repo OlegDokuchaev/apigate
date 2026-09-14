@@ -31,6 +31,12 @@ pub enum ApigateCoreError {
     /// Upstream request timed out.
     #[error("upstream request timed out")]
     UpstreamRequestTimedOut,
+    /// No route matches the request path.
+    #[error("route not found")]
+    RouteNotFound,
+    /// A route matches the path but not the method.
+    #[error("method not allowed")]
+    MethodNotAllowed,
 }
 
 impl ApigateCoreError {
@@ -46,6 +52,8 @@ impl ApigateCoreError {
             Self::InvalidUpstreamUri => "bad upstream uri",
             Self::UpstreamRequestFailed => "upstream request failed",
             Self::UpstreamRequestTimedOut => "upstream request timed out",
+            Self::RouteNotFound => "route not found",
+            Self::MethodNotAllowed => "method not allowed",
         }
     }
 
@@ -66,6 +74,8 @@ impl ApigateCoreError {
             | Self::InvalidUpstreamUri
             | Self::UpstreamRequestFailed => StatusCode::BAD_GATEWAY,
             Self::UpstreamRequestTimedOut => StatusCode::GATEWAY_TIMEOUT,
+            Self::RouteNotFound => StatusCode::NOT_FOUND,
+            Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
         }
     }
 
@@ -81,6 +91,8 @@ impl ApigateCoreError {
             Self::InvalidUpstreamUri => "invalid_upstream_uri",
             Self::UpstreamRequestFailed => "upstream_request_failed",
             Self::UpstreamRequestTimedOut => "upstream_timeout",
+            Self::RouteNotFound => "route_not_found",
+            Self::MethodNotAllowed => "method_not_allowed",
         }
     }
 }
