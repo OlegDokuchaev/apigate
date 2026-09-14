@@ -5,7 +5,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::routing;
 
-use super::dispatch::proxy_handler;
+use super::dispatch::{method_not_allowed, proxy_handler, route_not_found};
 use super::{App, AppBuilder, Inner, UpstreamConfig};
 use crate::backend::{BackendPool, BaseUri};
 use crate::error::{ApigateBuildError, ApigateFrameworkError, default_error_renderer};
@@ -221,7 +221,10 @@ impl AppBuilder {
             runtime_observer: self.runtime_observer,
         });
 
-        let router = router.with_state(inner);
+        let router = router
+            .fallback(route_not_found)
+            .method_not_allowed_fallback(method_not_allowed)
+            .with_state(inner);
 
         Ok(App { router })
     }

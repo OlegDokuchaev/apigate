@@ -14,6 +14,23 @@ use crate::route::RouteMeta;
 use crate::routing::RouteCtx;
 use crate::{ApigateError, PartsCtx, RequestScope};
 
+/// Fallback for paths no route matches, rendered through the configured error renderer.
+pub(super) async fn route_not_found(State(inner): State<Arc<Inner>>) -> axum::response::Response {
+    render_unrouted(&inner, ApigateCoreError::RouteNotFound)
+}
+
+/// Fallback for a matched path with an unsupported method, rendered through the error renderer.
+pub(super) async fn method_not_allowed(
+    State(inner): State<Arc<Inner>>,
+) -> axum::response::Response {
+    render_unrouted(&inner, ApigateCoreError::MethodNotAllowed)
+}
+
+fn render_unrouted(inner: &Inner, error: ApigateCoreError) -> axum::response::Response {
+    ApigateError::from(ApigateFrameworkError::from(error))
+        .into_response_with(inner.error_renderer.as_ref())
+}
+
 pub(super) async fn proxy_handler(
     State(inner): State<Arc<Inner>>,
     route_idx: usize,
