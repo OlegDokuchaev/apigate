@@ -262,6 +262,12 @@ mod tests {
     #[derive(Debug, Serialize)]
     struct EmptyQuery {}
 
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    struct PagedQuery {
+        page: u32,
+    }
+
     #[derive(Debug, Deserialize, PartialEq, Eq)]
     struct IncomingListQuery {
         #[serde(default)]
@@ -355,9 +361,9 @@ mod tests {
         assert_eq!(query.0, IncomingQuery { active: true });
 
         let rejection = ctx
-            .extract::<axum::extract::Query<IncomingListQuery>>()
+            .extract::<axum::extract::Query<PagedQuery>>()
             .await
-            .expect_err("`active` is not a list field");
+            .expect_err("`page` is missing from the query");
         assert_eq!(rejection.into_response().status(), StatusCode::BAD_REQUEST);
     }
 
