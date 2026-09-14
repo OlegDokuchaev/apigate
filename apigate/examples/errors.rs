@@ -115,6 +115,14 @@ Framework parse error (invalid json):
   curl -X POST -H 'authorization: Bearer t' -H 'content-type: application/json' \
     -d '{{\"sale_id\":' http://{listen}/sales/buy
 
+Wrong field type (details name the field: `sale_id: invalid type ...`):
+  curl -X POST -H 'authorization: Bearer t' -H 'content-type: application/json' \
+    -d '{{\"sale_id\":5}}' http://{listen}/sales/buy
+
+Unmatched route / method through the same renderer:
+  curl http://{listen}/sales/nope
+  curl -X DELETE http://{listen}/sales/buy
+
 Success:
   curl -X POST -H 'authorization: Bearer t' -H 'content-type: application/json' \
     -d '{{\"sale_id\":\"111\"}}' http://{listen}/sales/buy

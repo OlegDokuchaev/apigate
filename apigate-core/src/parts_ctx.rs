@@ -147,14 +147,28 @@ impl<'a> PartsCtx<'a> {
             .map_err(|_| ApigateError::from(ApigateCoreError::InvalidPathParameters))
     }
 
+    /// Runs any axum extractor over the request head.
+    pub async fn extract<E>(&mut self) -> Result<E, E::Rejection>
+    where
+        E: FromRequestParts<()>,
+    {
+        E::from_request_parts(self.parts, &()).await
+    }
+
     /// Extracts typed query parameters using `serde_html_form`.
     pub fn extract_query<T>(&self) -> Result<T, ApigateError>
     where
         T: serde::de::DeserializeOwned,
     {
         let raw = self.parts.uri.query().unwrap_or_default();
-        serde_html_form::from_str(raw)
-            .map_err(|err| ApigateError::from(ApigatePipelineError::InvalidQuery(err.to_string())))
+        serde_html_form::from_str(raw).map_err(|err| {
+            let de = serde_html_form::Deserializer::new(form_urlencoded::parse(raw.as_bytes()));
+            let details = match serde_path_to_error::deserialize::<_, T>(de) {
+                Err(tracked) => tracked.to_string(),
+                Ok(_) => err.to_string(),
+            };
+            ApigateError::from(ApigatePipelineError::InvalidQuery(details))
+        })
     }
 
     fn serialize_query<T>(&self, query: &T) -> Result<String, serde_html_form::ser::Error>
@@ -248,6 +262,12 @@ mod tests {
     #[derive(Debug, Serialize)]
     struct EmptyQuery {}
 
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    struct PagedQuery {
+        page: u32,
+    }
+
     #[derive(Debug, Deserialize, PartialEq, Eq)]
     struct IncomingListQuery {
         #[serde(default)]
@@ -324,6 +344,50 @@ mod tests {
         let query = ctx.extract_query::<IncomingQuery>().unwrap();
 
         assert_eq!(query, IncomingQuery { active: true });
+    }
+
+    #[tokio::test]
+    async fn parts_ctx_runs_axum_extractors() {
+        let mut parts = parts();
+        let mut ctx = PartsCtx::new("sales", "/{id}", &mut parts);
+
+        let method = ctx.extract::<Method>().await.unwrap();
+        assert_eq!(method, Method::POST);
+
+        let query = ctx
+            .extract::<axum::extract::Query<IncomingQuery>>()
+            .await
+            .unwrap();
+        assert_eq!(query.0, IncomingQuery { active: true });
+
+        let rejection = ctx
+            .extract::<axum::extract::Query<PagedQuery>>()
+            .await
+            .expect_err("`page` is missing from the query");
+        assert_eq!(rejection.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn parts_ctx_query_errors_name_the_field() {
+        let mut parts = Request::builder()
+            .method(Method::GET)
+            .uri("/sales/search?ids=1&ids=two")
+            .body(Body::empty())
+            .unwrap()
+            .into_parts()
+            .0;
+        let ctx = PartsCtx::new("sales", "/search", &mut parts);
+
+        let err = ctx
+            .extract_query::<IncomingListQuery>()
+            .expect_err("`two` is not a u32");
+        let details = err
+            .framework_error()
+            .and_then(|err| err.debug_details())
+            .unwrap()
+            .to_owned();
+
+        assert!(details.starts_with("ids[1]: "), "{details}");
     }
 
     #[test]

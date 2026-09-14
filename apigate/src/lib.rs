@@ -11,6 +11,43 @@ pub mod __private {
 
     use apigate_core::{ApigateError, ApigatePipelineError, MapResult};
     use axum::body::Body;
+    use serde::Deserialize;
+
+    /// Parses a JSON body.
+    pub fn parse_json<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> Result<T, ApigateError> {
+        serde_json::from_slice(bytes).map_err(|err| {
+            let mut de = serde_json::Deserializer::from_slice(bytes);
+            let details = match serde_path_to_error::deserialize::<_, T>(&mut de) {
+                Err(tracked) => tracked.to_string(),
+                Ok(_) => err.to_string(),
+            };
+            ApigateError::from(ApigatePipelineError::InvalidJsonBody(details))
+        })
+    }
+
+    /// Parses an `application/x-www-form-urlencoded` body; see [`parse_json`] for the error path.
+    pub fn parse_form<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> Result<T, ApigateError> {
+        serde_urlencoded::from_bytes(bytes).map_err(|err| {
+            let de = serde_urlencoded::Deserializer::new(form_urlencoded::parse(bytes));
+            let details = match serde_path_to_error::deserialize::<_, T>(de) {
+                Err(tracked) => tracked.to_string(),
+                Ok(_) => err.to_string(),
+            };
+            ApigateError::from(ApigatePipelineError::InvalidFormBody(details))
+        })
+    }
+
+    /// Parses form data carried in the query string (GET/HEAD form routes); see [`parse_json`].
+    pub fn parse_form_query<'de, T: Deserialize<'de>>(raw: &'de str) -> Result<T, ApigateError> {
+        serde_urlencoded::from_str(raw).map_err(|err| {
+            let de = serde_urlencoded::Deserializer::new(form_urlencoded::parse(raw.as_bytes()));
+            let details = match serde_path_to_error::deserialize::<_, T>(de) {
+                Err(tracked) => tracked.to_string(),
+                Ok(_) => err.to_string(),
+            };
+            ApigateError::from(ApigatePipelineError::InvalidFormQuery(details))
+        })
+    }
 
     /// Whether a `#[apigate::map]` keeps the original request body or replaces it.
     pub enum BodyOutcome<T> {

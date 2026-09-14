@@ -221,15 +221,13 @@ fn json_phase(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>) -> 
             );
             quote! {
                 let bytes = scope.read_body_bytes().await?;
-                let input: #ty = #apigate_path::__private::serde_json::from_slice(&bytes)
-                    .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidJsonBody(err.to_string())))?;
+                let input: #ty = #apigate_path::__private::parse_json(&bytes)?;
                 #apply
             }
         }
         None => quote! {
             let bytes = scope.read_body_bytes().await?;
-            let _: #ty = #apigate_path::__private::serde_json::from_slice(&bytes)
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidJsonBody(err.to_string())))?;
+            let _: #ty = #apigate_path::__private::parse_json(&bytes)?;
             Ok(#apigate_path::__private::axum::body::Body::from(bytes))
         },
     }
@@ -267,8 +265,7 @@ fn form_get_branch(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>
     match map_fn {
         Some(map_fn) => quote! {
             let raw = ctx.uri().query().unwrap_or_default();
-            let input: #ty = #apigate_path::__private::serde_urlencoded::from_str(raw)
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidFormQuery(err.to_string())))?;
+            let input: #ty = #apigate_path::__private::parse_form_query(raw)?;
             if let #apigate_path::__private::BodyOutcome::Replace(encoded) =
                 #map_fn::<#apigate_path::__private::Form>(input, &mut ctx, &mut scope).await?
             {
@@ -278,8 +275,7 @@ fn form_get_branch(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path>
         },
         None => quote! {
             let raw = ctx.uri().query().unwrap_or_default();
-            let _: #ty = #apigate_path::__private::serde_urlencoded::from_str(raw)
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidFormQuery(err.to_string())))?;
+            let _: #ty = #apigate_path::__private::parse_form_query(raw)?;
             #take
         },
     }
@@ -298,15 +294,13 @@ fn form_post_branch(apigate_path: &TokenStream2, ty: &Type, map_fn: Option<&Path
             );
             quote! {
                 let bytes = scope.read_body_bytes().await?;
-                let input: #ty = #apigate_path::__private::serde_urlencoded::from_bytes(&bytes)
-                    .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidFormBody(err.to_string())))?;
+                let input: #ty = #apigate_path::__private::parse_form(&bytes)?;
                 #apply
             }
         }
         None => quote! {
             let bytes = scope.read_body_bytes().await?;
-            let _: #ty = #apigate_path::__private::serde_urlencoded::from_bytes(&bytes)
-                .map_err(|err| #apigate_path::ApigateError::from(#apigate_path::ApigatePipelineError::InvalidFormBody(err.to_string())))?;
+            let _: #ty = #apigate_path::__private::parse_form(&bytes)?;
             Ok(#apigate_path::__private::axum::body::Body::from(bytes))
         },
     }

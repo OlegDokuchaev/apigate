@@ -28,13 +28,13 @@ Under the hood ApiGate is built on `axum`, `hyper-util`, `tower`, and `tracing`.
 
 - Declarative service and route macros: `#[apigate::service]`, `#[apigate::get]`, `#[apigate::post]`, etc.
 - Reverse proxying with streaming passthrough when a route does not need to read the body.
-- Typed validation for `path`, `query`, `json`, and `form` inputs.
+- Typed validation for `path`, `query`, `json`, and `form` inputs; parse errors name the offending field (`items[1].count: ...`).
 - `before` hooks for auth, headers, request metadata, and per-request state.
 - `map` functions for typed JSON/form request transformation before the upstream call, with outputs that may borrow from the input (no `.to_string()`), validate-only maps that return `()` to forward the body unchanged, and access to the original request bytes through `RawBody` (including schema-less maps).
 - Multipart passthrough without buffering file bodies.
 - Built-in policies: round-robin, consistent hash, header/path sticky, least-request, least-time.
 - Custom routing strategies and custom balancers.
-- Custom error rendering, including JSON envelopes and fully custom hook/map responses.
+- Custom error rendering, including JSON envelopes, fully custom hook/map responses, and unmatched routes (404/405).
 - Optional runtime observability through `tracing` or a custom runtime observer.
 - External `tower`/`axum` middleware composition through the underlying router.
 

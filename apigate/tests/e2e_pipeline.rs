@@ -13,6 +13,7 @@ struct EchoBody {
     uri: String,
     content_type: Option<String>,
     x_hook: Option<String>,
+    x_matched: Option<String>,
     body: String,
 }
 
@@ -30,6 +31,11 @@ async fn echo(req: Request<Body>) -> impl IntoResponse {
         x_hook: parts
             .headers
             .get("x-hook")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned),
+        x_matched: parts
+            .headers
+            .get("x-matched")
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned),
         body: String::from_utf8(bytes.to_vec()).unwrap(),
@@ -70,6 +76,17 @@ struct BuyService {
 #[apigate::hook]
 async fn inject_header(ctx: &mut apigate::PartsCtx<'_>, state: &AppState) -> apigate::HookResult {
     ctx.set_header("x-hook", state.source)?;
+    Ok(())
+}
+
+// Any axum extractor works on the request head; the rejection is the extractor's own.
+#[apigate::hook]
+async fn tag_matched_path(ctx: &mut apigate::PartsCtx<'_>) -> apigate::HookResult {
+    let matched = ctx
+        .extract::<axum::extract::MatchedPath>()
+        .await
+        .map_err(apigate::ApigateError::from_response)?;
+    ctx.set_header("x-matched", matched.as_str())?;
     Ok(())
 }
 
@@ -141,6 +158,9 @@ mod sales {
 
     #[apigate::post("/upload", multipart, map = inspect_multipart)]
     async fn upload() {}
+
+    #[apigate::get("/tagged/{id}", before = [tag_matched_path])]
+    async fn tagged() {}
 }
 
 async fn app(base_url: String) -> Router {
@@ -383,4 +403,17 @@ async fn invalid_path_parameters_return_framework_error() {
     let (status, _, body) = support::response_text(response).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body, "invalid path parameters");
+}
+
+#[tokio::test]
+async fn hooks_can_run_axum_extractors() {
+    let upstream = support::spawn_upstream(Router::new().fallback(echo)).await;
+    let router = app(upstream.url()).await;
+
+    let response = support::send(router, Method::GET, "/sales/tagged/42", Body::empty()).await;
+    let (status, _, body) = support::response_text(response).await;
+    let echo: EchoBody = serde_json::from_str(&body).unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(echo.x_matched.as_deref(), Some("/sales/tagged/{id}"));
 }
