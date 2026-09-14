@@ -244,6 +244,22 @@ fn protected() {}
 | `set_header_if_absent(name, value)` | Insert a header only when absent. |
 | `remove_header(name)` | Remove a header. |
 | `extensions()` / `extensions_mut()` | Access request extensions. |
+| `extract::<E>()` | Run any axum extractor (`MatchedPath`, `Query<T>`, `axum_extra::TypedHeader<_>`) over the request head. Returns the extractor's rejection; convert it with `ApigateError::from_response`. |
+| `extract_path::<T>()` / `extract_query::<T>()` | Typed path / query parameters as framework errors. |
+
+```rust
+#[apigate::hook]
+async fn tag_route(ctx: &mut apigate::PartsCtx) -> apigate::HookResult {
+    let matched = ctx
+        .extract::<axum::extract::MatchedPath>()
+        .await
+        .map_err(apigate::ApigateError::from_response)?;
+    ctx.set_header("x-route", matched.as_str())?;
+    Ok(())
+}
+```
+
+Extractors run with `()` as router state; app state lives in `extensions()` and `RequestScope`.
 
 ## Maps
 
@@ -575,6 +591,27 @@ Useful methods:
 | `code()` | Stable machine-readable code. |
 | `user_message()` | Message safe to return to clients. |
 | `debug_details()` | Internal diagnostic details intended for logs. |
+
+For `InvalidJsonBody`, `InvalidFormBody`, `InvalidFormQuery`, and `InvalidQuery` the
+details name the offending field, e.g. `items[1].count: invalid type: string "two",
+expected u32 at line 1 column 36`. The success path is a plain parse; the path is
+computed with `serde_path_to_error` only after a failure, by parsing the same bytes
+again.
+
+### Unmatched Routes
+
+Requests that match no route are rendered through the same renderer as
+`ApigateCoreError::RouteNotFound` (404, code `route_not_found`); a known path with an
+unsupported method as `ApigateCoreError::MethodNotAllowed` (405, code
+`method_not_allowed`). They never enter a route pipeline, so no runtime event is
+emitted for them. To take over, set your own fallback after building:
+
+```rust
+let app = apigate::App::builder()
+    .mount_service(sales::routes(), ["http://127.0.0.1:8081"])
+    .build()?
+    .with_router(|router| router.fallback(|| async { "custom 404" }));
+```
 
 ### Global JSON Error Renderer
 
